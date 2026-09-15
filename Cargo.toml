@@ -1,0 +1,27 @@
+[package]
+name = "imvic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Command-line argument parsing
+clap = { version = "4.6", features = ["derive"] }
+
+# High-resolution vector rasterization (SVG)
+resvg = "0.48"
+tiny-skia = "0.12"
+
+# Pixel buffer operations and PNG compression
+image = "0.25"
+
+# Base64 encoding for Kitty Graphics Protocol
+base64 = "0.23"
+
+# Terminal control (raw mode, events, alternate screen)
+crossterm = "0.29"
+
+# File system watcher for live reloading (latest stable)
+notify = "8.2"
+
+# Robust error handling and propagation
+anyhow = "1.0"
