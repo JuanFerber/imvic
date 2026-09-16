@@ -2,6 +2,7 @@
 //!
 //! Inspects file headers and extensions to route files to the correct decoder plugin.
 
+use super::formats::raster::RasterDecoder;
 use super::formats::svg::SvgDecoder;
 use super::{FormatDecoder, ImageSource};
 use anyhow::{Context, Result, bail};
@@ -24,6 +25,7 @@ impl DecoderRegistry {
 
         // Register default plugins
         registry.register(Box::new(SvgDecoder::new()));
+        registry.register(Box::new(RasterDecoder::new()));
 
         registry
     }

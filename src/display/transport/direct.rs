@@ -3,6 +3,7 @@
 use super::TransportAdapter;
 
 /// Pass-through transport for standard terminals without multiplexers.
+#[derive(Clone, Copy)]
 pub struct DirectTransport;
 
 impl DirectTransport {
@@ -26,8 +27,20 @@ impl TransportAdapter for DirectTransport {
         true
     }
 
+    fn is_passthrough_enabled(&self) -> bool {
+        true
+    }
+
+    fn passthrough_enable_hint(&self) -> Option<&'static str> {
+        None
+    }
+
     fn wrap_escape(&self, raw: &[u8]) -> Vec<u8> {
         raw.to_vec()
+    }
+
+    fn clone_box(&self) -> Box<dyn TransportAdapter> {
+        Box::new(*self)
     }
 }
 
@@ -40,5 +53,6 @@ mod tests {
         let transport = DirectTransport::new();
         let payload = b"\x1b_Ga=d,d=a\x1b\\";
         assert_eq!(transport.wrap_escape(payload), payload);
+        assert!(transport.is_passthrough_enabled());
     }
 }

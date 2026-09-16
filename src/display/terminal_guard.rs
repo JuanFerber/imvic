@@ -70,7 +70,7 @@ impl Drop for TerminalGuard {
         let _ = out.flush();
 
         // Stage 2: Clear placed GPU graphics and make cursor visible
-        let clear_cmd = b"\x1b_Ga=d,d=a\x1b\\";
+        let clear_cmd = b"\x1b_Ga=d,d=A\x1b\\";
         let wrapped_clear = self.transport.wrap_escape(clear_cmd);
         let _ = out.write_all(&wrapped_clear);
         let _ = crossterm::execute!(out, Show);

@@ -6,13 +6,14 @@ use super::GraphicsBackend;
 use crate::display::transport::TransportAdapter;
 use anyhow::{Context, Result};
 use base64::prelude::*;
-use image::codecs::png::PngEncoder;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ExtendedColorType, ImageEncoder, RgbaImage};
 use std::io::Write;
 
 const CHUNK_SIZE: usize = 4096;
 
 /// Graphics backend targeting Kitty, Ghostty, and WezTerm via the Kitty Graphics Protocol.
+#[derive(Clone, Copy)]
 pub struct KittyBackend;
 
 impl KittyBackend {
@@ -32,7 +33,7 @@ impl GraphicsBackend for KittyBackend {
         "Kitty Graphics Protocol"
     }
 
-    fn is_supported(&self) -> bool {
+    fn is_detected(&self) -> bool {
         // Check standard Kitty environment variables
         if std::env::var_os("KITTY_WINDOW_ID").is_some() || std::env::var_os("KITTY_PID").is_some()
         {
@@ -43,6 +44,14 @@ impl GraphicsBackend for KittyBackend {
         std::env::var("TERM")
             .map(|term| term.to_ascii_lowercase().contains("kitty"))
             .unwrap_or(false)
+    }
+
+    fn is_protocol_available(&self) -> bool {
+        self.is_detected()
+    }
+
+    fn clone_box(&self) -> Box<dyn GraphicsBackend> {
+        Box::new(*self)
     }
 
     fn draw_image(
@@ -58,7 +67,11 @@ impl GraphicsBackend for KittyBackend {
 
         // 1. Encode raw RGBA bytes into PNG in memory with zero unnecessary frame clones
         let mut png_bytes = Vec::new();
-        let encoder = PngEncoder::new(&mut png_bytes);
+        let encoder = PngEncoder::new_with_quality(
+            &mut png_bytes,
+            CompressionType::Fast,
+            FilterType::NoFilter,
+        );
         encoder
             .write_image(
                 frame.as_raw(),
@@ -79,6 +92,10 @@ impl GraphicsBackend for KittyBackend {
         let mut offset = 0;
         let mut is_first = true;
 
+        // Ensure Kitty's physical cursor is at row 1, col 1 and clear previous frame
+        let prep_cmd = transport.wrap_escape(b"\x1b[1;1H\x1b_Ga=d,d=i,i=1\x1b\\");
+        writer.write_all(&prep_cmd)?;
+
         while offset < total_len {
             let end = (offset + CHUNK_SIZE).min(total_len);
             let chunk = &b64_bytes[offset..end];
@@ -88,7 +105,7 @@ impl GraphicsBackend for KittyBackend {
             let raw_escape = if is_first {
                 // First chunk includes control headers
                 format!(
-                    "\x1b_Ga=T,f=100,t=d,c={},r={},q=2,m={};{}\x1b\\",
+                    "\x1b_Ga=T,f=100,t=d,i=1,C=1,c={},r={},q=2,m={};{}\x1b\\",
                     cols,
                     rows,
                     m,
@@ -119,7 +136,7 @@ impl GraphicsBackend for KittyBackend {
         writer: &mut dyn Write,
         transport: &dyn TransportAdapter,
     ) -> Result<()> {
-        let clear_cmd = b"\x1b_Ga=d,d=a\x1b\\";
+        let clear_cmd = b"\x1b_Ga=d,d=A\x1b\\";
         let wrapped = transport.wrap_escape(clear_cmd);
         writer.write_all(&wrapped)?;
         writer.flush()?;
@@ -142,7 +159,8 @@ mod tests {
         let result = backend.draw_image(&mut output, &transport, &frame, (40, 20));
         assert!(result.is_ok());
         assert!(!output.is_empty());
-        assert!(output.starts_with(b"\x1b_Ga=T,f=100"));
+        assert!(output.starts_with(b"\x1b[1;1H\x1b_Ga=d,d=i,i=1\x1b\\"));
+        assert!(output.windows(9).any(|w| w == b"a=T,f=100"));
         assert!(output.ends_with(b"\x1b\\"));
     }
 
@@ -154,6 +172,6 @@ mod tests {
 
         let result = backend.clear_graphics(&mut output, &transport);
         assert!(result.is_ok());
-        assert_eq!(output, b"\x1b_Ga=d,d=a\x1b\\");
+        assert_eq!(output, b"\x1b_Ga=d,d=A\x1b\\");
     }
 }
