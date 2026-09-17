@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::Parser;
 use crossterm::terminal::{WindowSize, size, window_size};
-use imvic::cli::CliArgs;
+use imvic::cli::{CliArgs, parse_bg_color};
 use imvic::decoder::DecoderRegistry;
 use imvic::display::backend::select_backend;
 use imvic::display::{HudState, TerminalGuard};
@@ -38,6 +38,7 @@ fn main() -> Result<()> {
 
     // 5. Initialize camera viewport and HUD
     let mut viewport = ViewportState::new(source.clone(), cols, view_rows);
+    viewport.set_bg_color(parse_bg_color(args.bg.as_deref()));
     if let Some(scale) = args.scale {
         viewport.zoom_at(cols / 2, view_rows / 2, scale);
     }

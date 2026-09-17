@@ -16,6 +16,7 @@ pub struct ViewportState {
     pub term_cols: u16,
     pub term_rows: u16,
     pub source: Arc<dyn ImageSource>,
+    pub bg_color: Option<[u8; 4]>,
 }
 
 impl ViewportState {
@@ -28,10 +29,16 @@ impl ViewportState {
             term_cols: term_cols.max(1),
             term_rows: term_rows.max(1),
             source,
+            bg_color: None,
         };
 
         viewport.fit_to_screen();
         viewport
+    }
+
+    /// Sets or clears the optional canvas background color.
+    pub fn set_bg_color(&mut self, bg_color: Option<[u8; 4]>) {
+        self.bg_color = bg_color;
     }
 
     /// Updates the underlying image source while preserving camera position.
@@ -103,27 +110,57 @@ impl ViewportState {
         self.offset_y = 0.0;
     }
 
-    /// Calculates current visible crop rectangle in source image coordinates.
-    pub fn current_crop(&self) -> CropRect {
+    /// Calculates current visible crop rectangle in source image coordinates,
+    /// preserving the aspect ratio of the target render screen (Contain / Letterboxing).
+    pub fn current_crop(&self, target_w: u32, target_h: u32) -> CropRect {
         let (img_w, img_h) = self.source.dimensions();
         let img_w = img_w as f32;
         let img_h = img_h as f32;
 
-        let visible_w = img_w / self.zoom;
-        let visible_h = img_h / self.zoom;
+        let target_w = target_w.max(1) as f32;
+        let target_h = target_h.max(1) as f32;
+
+        let base_scale = (target_w / img_w).min(target_h / img_h);
+        let effective_scale = base_scale * self.zoom;
+
+        let visible_w = target_w / effective_scale;
+        let visible_h = target_h / effective_scale;
+
+        let center_x = (img_w - visible_w) / 2.0;
+        let center_y = (img_h - visible_h) / 2.0;
 
         CropRect {
-            x: self.offset_x,
-            y: self.offset_y,
+            x: center_x + self.offset_x,
+            y: center_y + self.offset_y,
             width: visible_w,
             height: visible_h,
         }
     }
 
-    /// Renders current camera frame to target pixel dimensions.
+    /// Renders current camera frame to target pixel dimensions,
+    /// compositing the optional background color behind transparent pixels.
     pub fn render_frame(&self, target_w: u32, target_h: u32) -> RgbaImage {
-        let crop = self.current_crop();
-        self.source.render_crop(crop, target_w, target_h)
+        let crop = self.current_crop(target_w, target_h);
+        let mut frame = self.source.render_crop(crop, target_w, target_h);
+
+        // Si se especificó un color de fondo, lo aplicamos a todo el lienzo
+        if let Some([bg_r, bg_g, bg_b, bg_a]) = self.bg_color {
+            for pixel in frame.pixels_mut() {
+                let src_a = pixel[3] as f32 / 255.0;
+                if src_a == 0.0 {
+                    *pixel = image::Rgba([bg_r, bg_g, bg_b, bg_a]);
+                } else if src_a < 1.0 {
+                    // Mezcla alfa para suavizado de bordes (anti-aliasing)
+                    let inv_a = 1.0 - src_a;
+                    pixel[0] = (pixel[0] as f32 * src_a + bg_r as f32 * inv_a).round() as u8;
+                    pixel[1] = (pixel[1] as f32 * src_a + bg_g as f32 * inv_a).round() as u8;
+                    pixel[2] = (pixel[2] as f32 * src_a + bg_b as f32 * inv_a).round() as u8;
+                    pixel[3] = (pixel[3] as f32 + bg_a as f32 * inv_a).min(255.0).round() as u8;
+                }
+            }
+        }
+
+        frame
     }
 
     /// Clamps offsets to prevent panning completely away from the canvas.
