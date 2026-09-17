@@ -6,17 +6,42 @@ use crate::decoder::{CropRect, FormatDecoder, ImageSource};
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use resvg::tiny_skia::{Pixmap, Transform};
-use resvg::usvg::{Options, Tree};
+use resvg::usvg::{Options, Tree, fontdb};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Embedded fallback font assets covering Sans, Serif, and Monospace (Regular & Bold).
+const EMBEDDED_FONTS: &[&[u8]] = &[
+    include_bytes!("../../../assets/fonts/NotoSans-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSans-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSerif-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSerif-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSansMono-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/NotoSansMono-Bold.ttf"),
+];
+
 /// SVG vector format decoder plugin.
-pub struct SvgDecoder;
+pub struct SvgDecoder {
+    fontdb: Arc<fontdb::Database>,
+}
 
 impl SvgDecoder {
     /// Creates a new instance of the SVG decoder.
     pub fn new() -> Self {
-        Self
+        let mut fontdb = fontdb::Database::new();
+        fontdb.load_system_fonts();
+
+        for font_bytes in EMBEDDED_FONTS {
+            fontdb.load_font_data(font_bytes.to_vec());
+        }
+
+        fontdb.set_sans_serif_family("Noto Sans");
+        fontdb.set_serif_family("Noto Serif");
+        fontdb.set_monospace_family("Noto Sans Mono");
+
+        Self {
+            fontdb: Arc::new(fontdb),
+        }
     }
 }
 
@@ -48,7 +73,10 @@ impl FormatDecoder for SvgDecoder {
         let svg_bytes = std::fs::read(path)
             .with_context(|| format!("Failed to read SVG file at {:?}", path))?;
 
-        let opt = Options::default();
+        let opt = Options {
+            fontdb: self.fontdb.clone(),
+            ..Default::default()
+        };
         let tree = Tree::from_data(&svg_bytes, &opt)
             .with_context(|| format!("Failed to parse SVG data from {:?}", path))?;
 
@@ -137,5 +165,38 @@ mod tests {
         let frame = source.render_crop(crop, 200, 200);
         assert_eq!(frame.width(), 200);
         assert_eq!(frame.height(), 200);
+    }
+
+    #[test]
+    fn test_svg_text_rendering() {
+        let decoder = SvgDecoder::new();
+        let svg_with_text = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+                <text x="10" y="50" font-family="sans-serif" font-size="20" fill="black">Hello</text>
+            </svg>"#;
+
+        let opt = Options {
+            fontdb: decoder.fontdb.clone(),
+            ..Default::default()
+        };
+        let tree = Tree::from_data(svg_with_text, &opt).expect("Valid SVG with text");
+        let source = SvgImageSource {
+            tree,
+            width: 200,
+            height: 100,
+        };
+
+        let crop = CropRect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+
+        let frame = source.render_crop(crop, 200, 100);
+        let has_rendered_text_pixels = frame.pixels().any(|p| p[3] > 0);
+        assert!(
+            has_rendered_text_pixels,
+            "SVG text must render non-transparent glyph pixels"
+        );
     }
 }
