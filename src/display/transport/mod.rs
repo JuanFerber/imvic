@@ -16,6 +16,12 @@ pub trait TransportAdapter: Send + Sync {
     /// Detects if this transport/multiplexer is active in the current session.
     fn is_active(&self) -> bool;
 
+    /// Indicates whether this transport represents a multiplexer (e.g. Tmux, Zellij)
+    /// that requires virtual pane isolation and text-cell anchoring.
+    fn is_multiplexer(&self) -> bool {
+        false
+    }
+
     /// Checks if this transport permits passthrough escape sequences to the host terminal.
     fn is_passthrough_enabled(&self) -> bool;
 
@@ -24,6 +30,16 @@ pub trait TransportAdapter: Send + Sync {
 
     /// Wraps a raw escape sequence into the required multiplexer escape envelope.
     fn wrap_escape(&self, raw: &[u8]) -> Vec<u8>;
+
+    /// Physical terminal coordinates (row, col) where the current pane/session begins (1-indexed).
+    fn physical_origin(&self) -> (u16, u16) {
+        (1, 1)
+    }
+
+    /// Physical pixel dimensions of a single terminal cell (width, height), if reported by the transport.
+    fn cell_size(&self) -> Option<(u16, u16)> {
+        None
+    }
 
     /// Clones this transport into a trait object.
     fn clone_box(&self) -> Box<dyn TransportAdapter>;

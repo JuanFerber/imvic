@@ -39,6 +39,10 @@ impl TransportAdapter for DirectTransport {
         raw.to_vec()
     }
 
+    fn physical_origin(&self) -> (u16, u16) {
+        (1, 1)
+    }
+
     fn clone_box(&self) -> Box<dyn TransportAdapter> {
         Box::new(*self)
     }
