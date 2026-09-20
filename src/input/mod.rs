@@ -28,6 +28,8 @@ pub enum AppEvent {
     Resize { cols: u16, rows: u16 },
     /// Live reload signal from file system watcher
     FileModified,
+    /// Center camera view on image preserving current zoom level
+    CenterView,
     /// Exit application cleanly
     Quit,
 }

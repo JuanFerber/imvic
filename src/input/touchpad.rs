@@ -10,8 +10,20 @@ use crossterm::event::{
 
 /// High-resolution touchpad gesture adapter.
 pub struct TouchpadInputAdapter {
+    /// Tracks previous mouse cursor cell position during active single-finger dragging.
     last_drag_pos: Option<(u16, u16)>,
 }
+
+/// Symmetric logarithmic zoom step multipliers calibrated to the Weber-Fechner law
+/// of human sensory perception (approximately 120 smooth perceptual steps across the dynamic range).
+///
+/// Multiplier for focal zoom-in operations.
+pub const ZOOM_STEP_IN: f32 = 1.02528;
+
+/// Reciprocal multiplier for focal zoom-out operations (`1.0 / ZOOM_STEP_IN`).
+///
+/// Invariant: `ZOOM_STEP_IN * ZOOM_STEP_OUT ≈ 1.0` (guarantees zero drift over repeated zoom cycles).
+pub const ZOOM_STEP_OUT: f32 = 0.97534335;
 
 impl TouchpadInputAdapter {
     pub fn new() -> Self {
@@ -20,6 +32,7 @@ impl TouchpadInputAdapter {
         }
     }
 
+    /// Translates raw mouse events into high-level panning, focal zoom, and drag operations.
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<AppEvent> {
         match mouse.kind {
             // Pinch-to-zoom or Ctrl + 2-finger scroll: smooth focal zoom
@@ -27,14 +40,14 @@ impl TouchpadInputAdapter {
                 Some(AppEvent::ZoomIn {
                     cursor_x: mouse.column,
                     cursor_y: mouse.row,
-                    factor: 1.05,
+                    factor: ZOOM_STEP_IN,
                 })
             }
             MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(AppEvent::ZoomOut {
                     cursor_x: mouse.column,
                     cursor_y: mouse.row,
-                    factor: 0.95,
+                    factor: ZOOM_STEP_OUT,
                 })
             }
 
@@ -81,6 +94,7 @@ impl TouchpadInputAdapter {
         }
     }
 
+    /// Translates keyboard strokes into high-level control events (quit, center view).
     fn handle_key(&mut self, key: KeyEvent) -> Option<AppEvent> {
         match key.code {
             // Only essential keys to exit the raw mode terminal cleanly
@@ -88,6 +102,7 @@ impl TouchpadInputAdapter {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(AppEvent::Quit)
             }
+            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Home => Some(AppEvent::CenterView),
             _ => None,
         }
     }
@@ -167,7 +182,7 @@ mod tests {
             Some(AppEvent::ZoomIn {
                 cursor_x: 20,
                 cursor_y: 15,
-                factor: 1.05
+                factor: ZOOM_STEP_IN,
             })
         );
     }
@@ -177,5 +192,18 @@ mod tests {
         let mut adapter = TouchpadInputAdapter::new();
         let quit_key = Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty()));
         assert_eq!(adapter.handle_event(&quit_key), Some(AppEvent::Quit));
+    }
+
+    #[test]
+    fn test_center_view_key() {
+        let mut adapter = TouchpadInputAdapter::new();
+        let c_key = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::empty()));
+        assert_eq!(adapter.handle_event(&c_key), Some(AppEvent::CenterView));
+
+        let cap_c_key = Event::Key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT));
+        assert_eq!(adapter.handle_event(&cap_c_key), Some(AppEvent::CenterView));
+
+        let home_key = Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::empty()));
+        assert_eq!(adapter.handle_event(&home_key), Some(AppEvent::CenterView));
     }
 }
