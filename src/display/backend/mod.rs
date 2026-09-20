@@ -85,7 +85,7 @@ impl BackendRegistry {
                     "High-resolution graphics protocol not detected in current terminal.\n\
                          Imvic requires native GPU graphics rendering to guarantee pin-sharp vector display.\n\n\
                          Supported terminals:\n\
-                           - Kitty (https://sw.kovidgoyal.net/kitty/) [standalone or inside TMUX]\n\
+                           - Kitty (https://sw.kovidgoyal.net/kitty/) [standalone or inside multiplexers]\n\
                            - (Note: Ghostty and WezTerm plugins can be registered in BackendRegistry)"
                 );
             }
@@ -103,15 +103,16 @@ impl BackendRegistry {
         if !transport.is_passthrough_enabled() {
             let hint = transport
                 .passthrough_enable_hint()
-                .unwrap_or("enable passthrough");
+                .unwrap_or("enable passthrough in your multiplexer configuration");
             bail!(
                 "Compatible terminal '{}' detected, but multiplexer '{}' has passthrough disabled.\n\
                      Enable passthrough by executing:\n\
                        {}\n\
-                     or add 'set -g allow-passthrough on' to your multiplexer configuration.",
+                     or configure passthrough in your {} settings.",
                 backend.name(),
                 transport.name(),
-                hint
+                hint,
+                transport.name()
             );
         }
 

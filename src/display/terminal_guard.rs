@@ -8,13 +8,32 @@ use anyhow::Result;
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, poll, read};
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    DisableLineWrap, EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+    enable_raw_mode,
 };
 use std::io::{Write, stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 static PANIC_HOOK_SET: AtomicBool = AtomicBool::new(false);
+
+/// Kitty Graphics Protocol escape sequence to universally purge all placed GPU textures.
+///
+/// Breakdown:
+/// - `\x1b_G`: Kitty APC (Application Program Command) graphics payload initiator.
+/// - `a=d`: Action is Delete.
+/// - `d=A`: Delete all images across all virtual screens and z-indexes.
+/// - `\x1b\\`: Standard ANSI ST (String Terminator).
+///
+/// Emitted during teardown as a fail-safe to guarantee no lingering visual artifacts
+/// remain in the terminal buffer after process exit.
+const KITTY_CLEAR_ALL_GRAPHICS: &[u8] = b"\x1b_Ga=d,d=A\x1b\\";
+
+/// Maximum time to poll `stdin` during teardown to consume in-flight mouse escape sequences.
+///
+/// 15 milliseconds is calibrated to exceed terminal emulator packet latency for trailing
+/// mouse release events (e.g. SGR 1006 escape sequences) while remaining unnoticeable to the user.
+const STDIN_DRAIN_TIMEOUT: Duration = Duration::from_millis(15);
 
 /// RAII guard managing raw mode, alternate screen, mouse capture, and safe teardown.
 pub struct TerminalGuard {
@@ -30,7 +49,14 @@ impl TerminalGuard {
         enable_raw_mode()?;
 
         let mut out = stdout();
-        crossterm::execute!(out, EnterAlternateScreen, Hide, EnableMouseCapture)?;
+        crossterm::execute!(
+            out,
+            EnterAlternateScreen,
+            Hide,
+            EnableMouseCapture,
+            // Disable auto line-wrap to prevent scrolling artifacts when drawing on the rightmost edge
+            DisableLineWrap
+        )?;
         out.flush()?;
 
         let transport = detect_transport();
@@ -38,7 +64,7 @@ impl TerminalGuard {
         Ok(Self { transport })
     }
 
-    /// Accesses the active transport adapter (e.g. TMUX or Direct).
+    /// Accesses the active transport adapter used for escape wrapping.
     pub fn transport(&self) -> &dyn TransportAdapter {
         self.transport.as_ref()
     }
@@ -51,7 +77,13 @@ impl TerminalGuard {
                 // Emergency cleanup: restore cooked mode and leave alternate screen
                 let _ = disable_raw_mode();
                 let mut out = stdout();
-                let _ = crossterm::execute!(out, DisableMouseCapture, Show, LeaveAlternateScreen);
+                let _ = crossterm::execute!(
+                    out,
+                    DisableMouseCapture,
+                    Show,
+                    EnableLineWrap,
+                    LeaveAlternateScreen
+                );
                 let _ = out.flush();
 
                 // Forward to standard panic logger
@@ -70,20 +102,19 @@ impl Drop for TerminalGuard {
         let _ = out.flush();
 
         // Stage 2: Clear placed GPU graphics and make cursor visible
-        let clear_cmd = b"\x1b_Ga=d,d=A\x1b\\";
-        let wrapped_clear = self.transport.wrap_escape(clear_cmd);
+        let wrapped_clear = self.transport.wrap_escape(KITTY_CLEAR_ALL_GRAPHICS);
         let _ = out.write_all(&wrapped_clear);
         let _ = crossterm::execute!(out, Show);
         let _ = out.flush();
 
         // Stage 3: ACTIVELY DRAIN STDIN to prevent trailing mouse packets (e.g. ;23M)
         // from leaking into the user's shell (zsh/bash).
-        while let Ok(true) = poll(Duration::from_millis(15)) {
+        while let Ok(true) = poll(STDIN_DRAIN_TIMEOUT) {
             let _ = read();
         }
 
-        // Stage 4: Leave alternate screen and restore cooked mode
-        let _ = crossterm::execute!(out, LeaveAlternateScreen);
+        // Stage 4: Leave alternate screen, restore line wrap, and restore cooked mode
+        let _ = crossterm::execute!(out, EnableLineWrap, LeaveAlternateScreen);
         let _ = out.flush();
         let _ = disable_raw_mode();
     }
