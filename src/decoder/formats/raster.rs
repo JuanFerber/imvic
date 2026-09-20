@@ -5,8 +5,8 @@
 
 use crate::decoder::{CropRect, FormatDecoder, ImageSource};
 use anyhow::{Context, Result};
-use image::imageops::{FilterType, crop_imm, resize};
-use image::{GenericImageView, RgbaImage};
+use image::imageops::{FilterType, crop_imm, overlay, resize};
+use image::{GenericImageView, Rgba, RgbaImage};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -107,37 +107,55 @@ impl ImageSource for RasterImageSource {
         crop: CropRect,
         target_w: u32,
         target_h: u32,
-        _bg_color: Option<[u8; 4]>,
+        bg_color: Option<[u8; 4]>,
     ) -> RgbaImage {
         if target_w == 0 || target_h == 0 || crop.width <= 0.0 || crop.height <= 0.0 {
             return RgbaImage::new(1, 1);
         }
 
+        // Initialize screen canvas filled with canvas background color or transparent
+        let mut canvas = if let Some(bg) = bg_color {
+            RgbaImage::from_pixel(target_w, target_h, Rgba(bg))
+        } else {
+            RgbaImage::new(target_w, target_h)
+        };
+
         let img_w = self.width as f32;
         let img_h = self.height as f32;
 
-        // Calculate visible bounding box in image pixel space
-        let crop_x = crop.x.clamp(0.0, img_w);
-        let crop_y = crop.y.clamp(0.0, img_h);
-        let crop_w = (crop.width).min(img_w - crop_x).max(1.0);
-        let crop_h = (crop.height).min(img_h - crop_y).max(1.0);
+        // Calculate intersection between camera frustum and source image domain [0, img_w] x [0, img_h]
+        let x1 = crop.x.max(0.0).min(img_w);
+        let y1 = crop.y.max(0.0).min(img_h);
+        let x2 = (crop.x + crop.width).max(0.0).min(img_w);
+        let y2 = (crop.y + crop.height).max(0.0).min(img_h);
 
-        // Crop the source sub-rectangle
-        let cropped = crop_imm(
-            self.image.as_ref(),
-            crop_x.floor() as u32,
-            crop_y.floor() as u32,
-            crop_w.ceil() as u32,
-            crop_h.ceil() as u32,
-        );
+        // If the camera frustum overlaps with the image, project and composite the visible slice
+        if x2 > x1 && y2 > y1 {
+            let src_x = x1.floor() as u32;
+            let src_y = y1.floor() as u32;
+            let src_w = ((x2 - x1).ceil() as u32)
+                .min(self.width.saturating_sub(src_x))
+                .max(1);
+            let src_h = ((y2 - y1).ceil() as u32)
+                .min(self.height.saturating_sub(src_y))
+                .max(1);
 
-        // Rescale to target pixel dimensions using bilinear filtering
-        resize(
-            &cropped.to_image(),
-            target_w,
-            target_h,
-            FilterType::Triangle,
-        )
+            let cropped = crop_imm(self.image.as_ref(), src_x, src_y, src_w, src_h);
+
+            // Screen destination coordinates and dimensions preserving exact aspect ratio
+            let scale_x = target_w as f32 / crop.width;
+            let scale_y = target_h as f32 / crop.height;
+
+            let dst_x = ((x1 - crop.x) * scale_x).round() as i64;
+            let dst_y = ((y1 - crop.y) * scale_y).round() as i64;
+            let dst_w = ((x2 - x1) * scale_x).round().max(1.0) as u32;
+            let dst_h = ((y2 - y1) * scale_y).round().max(1.0) as u32;
+
+            let resized = resize(&cropped.to_image(), dst_w, dst_h, FilterType::Triangle);
+            overlay(&mut canvas, &resized, dst_x, dst_y);
+        }
+
+        canvas
     }
 }
 
@@ -156,5 +174,61 @@ mod tests {
 
         let text_file = b"Hello, World!";
         assert!(!decoder.can_decode(Path::new("test.txt"), text_file));
+    }
+
+    #[test]
+    fn test_raster_bg_color_composition() {
+        // Create a 2x2 fully transparent PNG surface
+        let transparent_img = Arc::new(RgbaImage::new(2, 2));
+        let source = RasterImageSource {
+            image: transparent_img,
+            width: 2,
+            height: 2,
+        };
+
+        // Render with red background [255, 0, 0, 255]
+        let red_bg = Some([255, 0, 0, 255]);
+        let crop = CropRect {
+            x: 0.0,
+            y: 0.0,
+            width: 2.0,
+            height: 2.0,
+        };
+        let frame = source.render_crop(crop, 4, 4, red_bg);
+
+        // Every pixel must have blended with the red background
+        for pixel in frame.pixels() {
+            assert_eq!(pixel.0, [255, 0, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn test_raster_panning_past_edges_preserves_canvas() {
+        // Create a 10x10 image with solid white pixels
+        let img = Arc::new(RgbaImage::from_pixel(10, 10, Rgba([255, 255, 255, 255])));
+        let source = RasterImageSource {
+            image: img,
+            width: 10,
+            height: 10,
+        };
+
+        // Camera frustum looking 50% outside the left edge: x in [-5.0, 5.0]
+        let crop = CropRect {
+            x: -5.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        // Target screen is 100x100 with red background
+        let red_bg = Some([255, 0, 0, 255]);
+        let frame = source.render_crop(crop, 100, 100, red_bg);
+
+        // Left half [0..50) must be background (red)
+        let left_pixel = frame.get_pixel(10, 50);
+        assert_eq!(left_pixel.0, [255, 0, 0, 255]);
+
+        // Right half [50..100) must contain the image (white)
+        let right_pixel = frame.get_pixel(75, 50);
+        assert_eq!(right_pixel.0, [255, 255, 255, 255]);
     }
 }

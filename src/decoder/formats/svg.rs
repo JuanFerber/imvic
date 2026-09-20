@@ -78,8 +78,12 @@ impl FormatDecoder for SvgDecoder {
             .map(|ext| ext.eq_ignore_ascii_case("svg"))
             .unwrap_or(false);
 
-        let has_svg_magic =
-            header.windows(4).any(|w| w == b"<svg") || header.windows(5).any(|w| w == b"<?xml");
+        // Header sniffing: must contain '<svg' tag or '<!doctype svg' declaration
+        let contains_svg_tag = header.windows(4).any(|w| w.eq_ignore_ascii_case(b"<svg"));
+        let contains_svg_doctype = header
+            .windows(13)
+            .any(|w| w.eq_ignore_ascii_case(b"<!doctype svg"));
+        let has_svg_magic = contains_svg_tag || contains_svg_doctype;
 
         has_svg_extension || has_svg_magic
     }
@@ -383,8 +387,24 @@ mod tests {
     #[test]
     fn test_svg_detection() {
         let decoder = SvgDecoder::new();
+
+        // Standard extension
         let path = Path::new("test.svg");
         assert!(decoder.can_decode(path, SAMPLE_SVG));
+
+        // Unknown extension with pure <svg> header
+        let unk_path = Path::new("test_drawing.unknown");
+        assert!(decoder.can_decode(unk_path, SAMPLE_SVG));
+
+        // SVG with XML prologue
+        let xml_svg =
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg width=\"100\" height=\"100\"></svg>";
+        assert!(decoder.can_decode(unk_path, xml_svg));
+
+        // Generic XML without <svg> tag must be rejected!
+        let generic_xml =
+            b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed><title>RSS</title></feed>";
+        assert!(!decoder.can_decode(unk_path, generic_xml));
     }
 
     #[test]
