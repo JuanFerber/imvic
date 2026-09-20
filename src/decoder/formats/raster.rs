@@ -102,7 +102,13 @@ impl ImageSource for RasterImageSource {
         (self.width, self.height)
     }
 
-    fn render_crop(&self, crop: CropRect, target_w: u32, target_h: u32) -> RgbaImage {
+    fn render_crop(
+        &self,
+        crop: CropRect,
+        target_w: u32,
+        target_h: u32,
+        _bg_color: Option<[u8; 4]>,
+    ) -> RgbaImage {
         if target_w == 0 || target_h == 0 || crop.width <= 0.0 || crop.height <= 0.0 {
             return RgbaImage::new(1, 1);
         }

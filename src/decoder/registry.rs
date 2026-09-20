@@ -11,6 +11,9 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
+/// Number of initial header bytes probed to sniff magic signatures (e.g. `<?xml`, `<svg`, PNG header).
+const HEADER_PROBE_SIZE: usize = 512;
+
 /// Central registry managing all registered image format decoders.
 pub struct DecoderRegistry {
     decoders: Vec<Box<dyn FormatDecoder>>,
@@ -37,7 +40,7 @@ impl DecoderRegistry {
 
     /// Inspects file path and initial header bytes to locate a capable decoder.
     pub fn find_decoder(&self, path: &Path) -> Result<&dyn FormatDecoder> {
-        let mut header = [0u8; 512];
+        let mut header = [0u8; HEADER_PROBE_SIZE];
         let bytes_read = if let Ok(mut file) = File::open(path) {
             file.read(&mut header).unwrap_or(0)
         } else {

@@ -25,8 +25,14 @@ pub trait ImageSource: Send + Sync {
     /// Returns natural width and height of the image in source pixels.
     fn dimensions(&self) -> (u32, u32);
 
-    /// Renders a sub-region (crop) adapted to target pixel dimensions.
-    fn render_crop(&self, crop: CropRect, target_w: u32, target_h: u32) -> RgbaImage;
+    /// Renders a sub-region (crop) adapted to target pixel dimensions with optional background color.
+    fn render_crop(
+        &self,
+        crop: CropRect,
+        target_w: u32,
+        target_h: u32,
+        bg_color: Option<[u8; 4]>,
+    ) -> RgbaImage;
 }
 
 /// Contract for image format decoder plugins.
