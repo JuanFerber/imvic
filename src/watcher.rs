@@ -11,6 +11,10 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Default debounce duration to prevent reading partially written files
+/// while text editors or formatters flush buffers to disk.
+const DEFAULT_DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
+
 /// Background file system watcher.
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -30,7 +34,6 @@ impl FileWatcher {
 
         let target_path = canonical_path;
         let last_event_time = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
-        let debounce_duration = Duration::from_millis(200);
 
         let event_handler = move |res: notify::Result<Event>| {
             if let Ok(event) = res {
@@ -44,7 +47,7 @@ impl FileWatcher {
                     && let Ok(mut last_time) = last_event_time.lock()
                 {
                     let now = Instant::now();
-                    if now.duration_since(*last_time) >= debounce_duration {
+                    if now.duration_since(*last_time) >= DEFAULT_DEBOUNCE_DURATION {
                         *last_time = now;
                         let _ = tx.send(AppEvent::FileModified);
                     }

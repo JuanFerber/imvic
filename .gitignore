@@ -1,3 +1,6 @@
 # General
 /target
 /.local
+
+# Local performance benchmarks & experimental scripts
+/examples/

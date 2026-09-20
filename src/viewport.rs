@@ -7,6 +7,12 @@ use crate::decoder::{CropRect, ImageSource};
 use image::RgbaImage;
 use std::sync::Arc;
 
+pub const MIN_ZOOM: f32 = 0.50;
+pub const MAX_ZOOM: f32 = 10.0;
+
+/// Minimum percentage of the canvas dimension that must remain visible on screen when panning.
+pub const MIN_CANVAS_VISIBILITY_RATIO: f32 = 0.10;
+
 /// Represents interactive camera state projecting an image onto a terminal grid.
 #[derive(Clone)]
 pub struct ViewportState {
@@ -73,13 +79,18 @@ impl ViewportState {
     }
 
     /// Zooms camera anchored at specific terminal cursor coordinates (zoom-to-cursor invariance).
+    ///
+    /// Preserves sub-pixel focal invariance using the center-relative coordinate space
+    /// and guards against catastrophic cancellation / division-by-zero near boundary limits.
     pub fn zoom_at(&mut self, cursor_col: u16, cursor_row: u16, factor: f32) {
-        if factor <= 0.0 {
+        if factor <= 0.0 || (factor - 1.0).abs() < 1e-6 {
             return;
         }
 
-        let new_zoom = (self.zoom * factor).clamp(0.05, 100.0);
-        let effective_factor = new_zoom / self.zoom;
+        let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        if (new_zoom - self.zoom).abs() < 1e-6 {
+            return;
+        }
 
         let (img_w, img_h) = self.source.dimensions();
         let img_w = img_w as f32;
@@ -88,9 +99,11 @@ impl ViewportState {
         let u_c = (cursor_col as f32 / self.term_cols as f32).clamp(0.0, 1.0);
         let v_c = (cursor_row as f32 / self.term_rows as f32).clamp(0.0, 1.0);
 
-        // Focal zoom formula: keep point under cursor invariant
-        self.offset_x += (u_c * img_w / self.zoom) * (1.0 - 1.0 / effective_factor);
-        self.offset_y += (v_c * img_h / self.zoom) * (1.0 - 1.0 / effective_factor);
+        // Center-relative focal zoom formula: keeps point under cursor strictly stationary
+        // Delta offset = (cursor - 0.5) * img_dimension * (1/z_old - 1/z_new)
+        let inv_diff = 1.0 / self.zoom - 1.0 / new_zoom;
+        self.offset_x += (u_c - 0.5) * img_w * inv_diff;
+        self.offset_y += (v_c - 0.5) * img_h * inv_diff;
 
         self.zoom = new_zoom;
         self.clamp_offsets();
@@ -106,6 +119,12 @@ impl ViewportState {
     /// Resets camera zoom to 100% (1:1) and centers offsets.
     pub fn reset_view(&mut self) {
         self.zoom = 1.0;
+        self.offset_x = 0.0;
+        self.offset_y = 0.0;
+    }
+
+    /// Centers the camera view on the image without changing the current zoom level.
+    pub fn center_view(&mut self) {
         self.offset_x = 0.0;
         self.offset_y = 0.0;
     }
@@ -137,30 +156,11 @@ impl ViewportState {
         }
     }
 
-    /// Renders current camera frame to target pixel dimensions,
-    /// compositing the optional background color behind transparent pixels.
+    /// Renders current camera frame to target pixel dimensions.
     pub fn render_frame(&self, target_w: u32, target_h: u32) -> RgbaImage {
         let crop = self.current_crop(target_w, target_h);
-        let mut frame = self.source.render_crop(crop, target_w, target_h);
-
-        // Si se especificó un color de fondo, lo aplicamos a todo el lienzo
-        if let Some([bg_r, bg_g, bg_b, bg_a]) = self.bg_color {
-            for pixel in frame.pixels_mut() {
-                let src_a = pixel[3] as f32 / 255.0;
-                if src_a == 0.0 {
-                    *pixel = image::Rgba([bg_r, bg_g, bg_b, bg_a]);
-                } else if src_a < 1.0 {
-                    // Mezcla alfa para suavizado de bordes (anti-aliasing)
-                    let inv_a = 1.0 - src_a;
-                    pixel[0] = (pixel[0] as f32 * src_a + bg_r as f32 * inv_a).round() as u8;
-                    pixel[1] = (pixel[1] as f32 * src_a + bg_g as f32 * inv_a).round() as u8;
-                    pixel[2] = (pixel[2] as f32 * src_a + bg_b as f32 * inv_a).round() as u8;
-                    pixel[3] = (pixel[3] as f32 + bg_a as f32 * inv_a).min(255.0).round() as u8;
-                }
-            }
-        }
-
-        frame
+        self.source
+            .render_crop(crop, target_w, target_h, self.bg_color)
     }
 
     /// Clamps offsets to prevent panning completely away from the canvas.
@@ -172,16 +172,14 @@ impl ViewportState {
         let visible_w = img_w / self.zoom;
         let visible_h = img_h / self.zoom;
 
-        // Allow panning with a safety margin (at least 10% visible)
-        let margin_x = visible_w * 0.9;
-        let margin_y = visible_h * 0.9;
+        // Keep at least the minimum percentage of the canvas visible on screen when panning
+        let min_visible_x = (visible_w.min(img_w) * MIN_CANVAS_VISIBILITY_RATIO).max(1.0);
+        let min_visible_y = (visible_h.min(img_h) * MIN_CANVAS_VISIBILITY_RATIO).max(1.0);
 
-        let min_x = -margin_x;
-        let max_x = img_w - visible_w * 0.1;
-        let min_y = -margin_y;
-        let max_y = img_h - visible_h * 0.1;
+        let max_offset_x = ((img_w + visible_w) / 2.0 - min_visible_x).max(0.0);
+        let max_offset_y = ((img_h + visible_h) / 2.0 - min_visible_y).max(0.0);
 
-        self.offset_x = self.offset_x.clamp(min_x, max_x);
-        self.offset_y = self.offset_y.clamp(min_y, max_y);
+        self.offset_x = self.offset_x.clamp(-max_offset_x, max_offset_x);
+        self.offset_y = self.offset_y.clamp(-max_offset_y, max_offset_y);
     }
 }

@@ -13,7 +13,116 @@ use imvic::viewport::ViewportState;
 use imvic::watcher::FileWatcher;
 use std::io::{BufWriter, Write, stdout};
 use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Capacity of the standard output buffer in bytes (256 KB).
+///
+/// Pre-allocating a large buffer ensures high-throughput graphics payloads flush in single system calls.
+const STDOUT_BUFFER_CAPACITY: usize = 256 * 1024;
+
+/// Maximum number of crossterm input events to drain within a single frame tick.
+///
+/// Prevents event starvation during high-frequency touchpad scrolling.
+const MAX_EVENTS_PER_FRAME: usize = 128;
+
+/// Idle polling timeout when no visual updates are pending (~60 Hz idle tick).
+const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(16);
+
+/// Fallback character cell dimensions in pixels (width, height).
+///
+/// Used when neither the terminal emulator nor multiplexer reports physical cell dimensions.
+/// Assumes a standard 1:2 aspect ratio monospace font matrix.
+const DEFAULT_CELL_PIXEL_SIZE: (u16, u16) = (11, 22);
+
+/// Coalesces high-frequency touchpad and crossterm events within a single 144 Hz frame tick.
+#[derive(Debug, Default)]
+struct InputCoalescer {
+    /// Accumulated horizontal pan displacement in terminal columns.
+    pan_dx: f32,
+    /// Accumulated vertical pan displacement in terminal rows.
+    pan_dy: f32,
+    /// Multiplicative compound zoom factor (calibrated to Weber-Fechner scale).
+    zoom_factor: f32,
+    /// Anchor cursor cell coordinates for the compounded focal zoom.
+    last_zoom_cursor: Option<(u16, u16)>,
+    /// Pending terminal window dimension update (cols, rows).
+    resize: Option<(u16, u16)>,
+    /// Flag indicating whether camera should re-center on image.
+    center_view: bool,
+    /// Flag indicating whether the user requested to terminate the session.
+    quit: bool,
+}
+
+impl InputCoalescer {
+    /// Creates a new coalescer initialized with neutral multipliers.
+    fn new() -> Self {
+        Self {
+            zoom_factor: 1.0,
+            ..Default::default()
+        }
+    }
+
+    /// Records an incoming high-level event, accumulating continuous gestures.
+    fn record(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Quit => self.quit = true,
+            AppEvent::Pan { delta_x, delta_y } => {
+                self.pan_dx += delta_x;
+                self.pan_dy += delta_y;
+            }
+            AppEvent::ZoomIn {
+                cursor_x,
+                cursor_y,
+                factor,
+            }
+            | AppEvent::ZoomOut {
+                cursor_x,
+                cursor_y,
+                factor,
+            } => {
+                self.zoom_factor *= factor;
+                self.last_zoom_cursor = Some((cursor_x, cursor_y));
+            }
+            AppEvent::Resize { cols, rows } => {
+                self.resize = Some((cols, rows));
+            }
+            AppEvent::CenterView => {
+                self.center_view = true;
+            }
+            AppEvent::FileModified => {}
+        }
+    }
+
+    /// Applies accumulated pan deltas, logarithmic zoom, and resize events to the viewport.
+    /// Returns `true` if the viewport state changed and requires a redraw.
+    fn apply(self, viewport: &mut ViewportState) -> bool {
+        let mut dirty = false;
+
+        if let Some((cols, rows)) = self.resize {
+            viewport.set_terminal_size(cols, rows.saturating_sub(1).max(1));
+            dirty = true;
+        }
+
+        if self.center_view {
+            viewport.center_view();
+            dirty = true;
+        }
+
+        if self.pan_dx != 0.0 || self.pan_dy != 0.0 {
+            viewport.pan(self.pan_dx, self.pan_dy);
+            dirty = true;
+        }
+
+        if (self.zoom_factor - 1.0).abs() > 1e-6
+            && let Some((cx, cy)) = self.last_zoom_cursor
+        {
+            viewport.zoom_at(cx, cy, self.zoom_factor);
+            dirty = true;
+        }
+
+        dirty
+    }
+}
 
 fn main() -> Result<()> {
     let args = CliArgs::parse();
@@ -59,8 +168,13 @@ fn main() -> Result<()> {
         None
     };
 
-    let mut out = BufWriter::new(stdout());
+    let mut out = BufWriter::with_capacity(STDOUT_BUFFER_CAPACITY, stdout());
     let mut dirty = true;
+
+    let min_frame_duration = args
+        .fps
+        .map(|fps| Duration::from_secs_f64(1.0 / fps.max(1) as f64));
+    let mut last_frame_time = Instant::now();
 
     // 8. 60 FPS Interactive Event Loop
     loop {
@@ -84,52 +198,31 @@ fn main() -> Result<()> {
         let poll_timeout = if dirty {
             Duration::from_millis(0)
         } else {
-            Duration::from_millis(16)
+            IDLE_POLL_TIMEOUT
         };
 
         let mut should_quit = false;
 
         if crossterm::event::poll(poll_timeout)? {
             let mut drained = 0;
-            while drained < 8 && crossterm::event::poll(Duration::from_millis(0))? {
+            let mut coalescer = InputCoalescer::new();
+
+            while drained < MAX_EVENTS_PER_FRAME
+                && crossterm::event::poll(Duration::from_millis(0))?
+            {
                 let raw_event = crossterm::event::read()?;
                 drained += 1;
                 if let Some(app_event) = input_registry.handle_event(&raw_event) {
-                    match app_event {
-                        AppEvent::Quit => {
-                            should_quit = true;
-                            break;
-                        }
-                        AppEvent::Pan { delta_x, delta_y } => {
-                            viewport.pan(delta_x, delta_y);
-                            dirty = true;
-                        }
-                        AppEvent::ZoomIn {
-                            cursor_x,
-                            cursor_y,
-                            factor,
-                        } => {
-                            viewport.zoom_at(cursor_x, cursor_y, factor);
-                            dirty = true;
-                        }
-                        AppEvent::ZoomOut {
-                            cursor_x,
-                            cursor_y,
-                            factor,
-                        } => {
-                            viewport.zoom_at(cursor_x, cursor_y, factor);
-                            dirty = true;
-                        }
-                        AppEvent::Resize {
-                            cols: new_cols,
-                            rows: new_rows,
-                        } => {
-                            viewport.set_terminal_size(new_cols, new_rows.saturating_sub(1).max(1));
-                            dirty = true;
-                        }
-                        AppEvent::FileModified => {}
-                    }
+                    coalescer.record(app_event);
                 }
+            }
+
+            if coalescer.quit {
+                should_quit = true;
+            }
+
+            if coalescer.apply(&mut viewport) {
+                dirty = true;
             }
         }
 
@@ -139,26 +232,38 @@ fn main() -> Result<()> {
 
         // C. Render frame if dirty
         if dirty {
+            if let Some(min_duration) = min_frame_duration {
+                let elapsed = last_frame_time.elapsed();
+                if elapsed < min_duration {
+                    std::thread::sleep(min_duration - elapsed);
+                }
+            }
+            last_frame_time = Instant::now();
+
             let (curr_cols, curr_rows) = size()?;
             let view_rows = curr_rows.saturating_sub(1).max(1);
 
-            // Compute exact pixel dimensions using terminal pixel resolution if supported
-            let (target_w, target_h) = match window_size() {
+            // Compute exact integer cell dimensions to guarantee zero aspect-ratio gap in high-resolution terminal displays
+            let (cell_w, cell_h) = match window_size() {
                 Ok(WindowSize {
                     width,
                     height,
                     columns,
                     rows,
                 }) if width > 0 && height > 0 && columns > 0 && rows > 0 => {
-                    let cell_w = width as f32 / columns as f32;
-                    let cell_h = height as f32 / rows as f32;
-                    (
-                        (curr_cols as f32 * cell_w).round() as u32,
-                        (view_rows as f32 * cell_h).round() as u32,
-                    )
+                    ((width / columns).max(1), (height / rows).max(1))
                 }
-                _ => (curr_cols as u32 * 10, view_rows as u32 * 20),
+                _ => {
+                    if let Some((cw, ch)) = guard.transport().cell_size() {
+                        (cw, ch)
+                    } else {
+                        DEFAULT_CELL_PIXEL_SIZE
+                    }
+                }
             };
+
+            let target_w = curr_cols as u32 * cell_w as u32;
+            let target_h = view_rows as u32 * cell_h as u32;
 
             // Render camera crop
             let frame = viewport.render_frame(target_w, target_h);

@@ -36,10 +36,17 @@ pub struct CliArgs {
         )]
     pub bg: Option<String>,
 
+    /// Target framerate limit in FPS (e.g. 30, 60, 144). Defaults to uncapped/native.
+    #[arg(long = "fps", value_name = "FPS")]
+    pub fps: Option<u32>,
+
     /// Print verbose debugging traces and terminal protocol events
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 }
+
+/// Default solid white canvas background fallback [R, G, B, A].
+pub const DEFAULT_FALLBACK_BG: [u8; 4] = [255, 255, 255, 255];
 
 /// Parses an optional CLI background string into an RGBA byte array.
 ///
@@ -49,9 +56,9 @@ pub struct CliArgs {
 pub fn parse_bg_color(arg: Option<&str>) -> Option<[u8; 4]> {
     let raw = arg?.trim();
 
-    // Fallback estándar a blanco si no tiene prefijo '#'
+    // Standard fallback to solid white if '#' prefix is missing
     if !raw.starts_with('#') {
-        return Some([255, 255, 255, 255]);
+        return Some(DEFAULT_FALLBACK_BG);
     }
 
     let hex = &raw[1..];
@@ -86,10 +93,10 @@ pub fn parse_bg_color(arg: Option<&str>) -> Option<[u8; 4]> {
             let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
             Some([r, g, b, a])
         }
-        // Fallback a blanco ante cualquier longitud inválida
-        _ => Some([255, 255, 255, 255]),
+        // Fallback to white on any invalid length
+        _ => Some(DEFAULT_FALLBACK_BG),
     }
-    .or(Some([255, 255, 255, 255]))
+    .or(Some(DEFAULT_FALLBACK_BG))
 }
 
 #[cfg(test)]
@@ -98,13 +105,13 @@ mod tests {
 
     #[test]
     fn test_parse_bg_color() {
-        // Sin argumento -> transparente
+        // No argument -> transparent
         assert_eq!(parse_bg_color(None), None);
 
-        // Sin prefijo '#' o inválido -> fallback blanco
-        assert_eq!(parse_bg_color(Some("default")), Some([255, 255, 255, 255]));
-        assert_eq!(parse_bg_color(Some("white")), Some([255, 255, 255, 255]));
-        assert_eq!(parse_bg_color(Some("invalid")), Some([255, 255, 255, 255]));
+        // Missing '#' prefix or invalid -> fallback white
+        assert_eq!(parse_bg_color(Some("default")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("white")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("invalid")), Some(DEFAULT_FALLBACK_BG));
 
         // #RGB
         assert_eq!(parse_bg_color(Some("#fff")), Some([255, 255, 255, 255]));
