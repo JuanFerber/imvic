@@ -1,6 +1,6 @@
 //! Kitty Graphics Protocol backend with 4096-byte chunking and in-memory PNG compression.
 //!
-//! Transmits high-resolution images directly to the terminal GPU using APC escape sequences.
+//! Transmits high-resolution images to terminal emulators with native graphics presentation using APC escape sequences.
 
 use super::GraphicsBackend;
 use crate::display::transport::TransportAdapter;
@@ -21,7 +21,7 @@ pub struct KittyBackend {
     png_buffer: Vec<u8>,
     /// Preallocated scratch buffer for Base64 payload encoding.
     b64_buffer: String,
-    /// Toggled texture identifier (1 or 2) for flicker-free double buffering.
+    /// Alternating image identifier (1 or 2) to eliminate visual flicker during frame replacement.
     current_image_id: u32,
 }
 
@@ -237,7 +237,6 @@ impl GraphicsBackend for KittyBackend {
         writer.write_all(&wrapped_del)?;
 
         self.current_image_id = new_id;
-        writer.flush()?;
         Ok(())
     }
 
@@ -246,10 +245,9 @@ impl GraphicsBackend for KittyBackend {
         writer: &mut dyn Write,
         transport: &dyn TransportAdapter,
     ) -> Result<()> {
-        let raw_escape = b"\x1b_Ga=d,d=A\x1b\\";
-        let wrapped = transport.wrap_escape(raw_escape);
-        writer.write_all(&wrapped)?;
-        writer.flush()?;
+        let clear_cmd = b"\x1b_Ga=d,d=A\x1b\\";
+        let wrapped_clear = transport.wrap_escape(clear_cmd);
+        writer.write_all(&wrapped_clear)?;
         Ok(())
     }
 }

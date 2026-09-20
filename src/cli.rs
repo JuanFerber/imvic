@@ -5,12 +5,12 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// High-performance, modular, GPU-accelerated terminal image and vector viewer
-#[derive(Parser, Debug, Clone)]
+/// High-performance, modular terminal image viewer with terminal-native graphics presentation.
+#[derive(Parser, Debug)]
 #[command(
     name = "imvic",
     version,
-    about = "High-performance, modular, GPU-accelerated terminal image and vector viewer."
+    about = "High-performance, modular terminal image viewer with terminal-native graphics presentation."
 )]
 pub struct CliArgs {
     /// Path to the image or vector file to display
@@ -18,7 +18,7 @@ pub struct CliArgs {
     pub file: PathBuf,
 
     /// Watch file for changes and reload view automatically (Live Reload)
-    #[arg(short = 'w', long = "watch", default_value_t = true)]
+    #[arg(short = 'w', long = "watch")]
     pub watch: bool,
 
     /// Initial zoom or scale factor override
@@ -39,10 +39,6 @@ pub struct CliArgs {
     /// Target framerate limit in FPS (e.g. 30, 60, 144). Defaults to uncapped/native.
     #[arg(long = "fps", value_name = "FPS")]
     pub fps: Option<u32>,
-
-    /// Print verbose debugging traces and terminal protocol events
-    #[arg(short = 'v', long = "verbose")]
-    pub verbose: bool,
 }
 
 /// Default solid white canvas background fallback [R, G, B, A].
@@ -62,41 +58,43 @@ pub fn parse_bg_color(arg: Option<&str>) -> Option<[u8; 4]> {
     }
 
     let hex = &raw[1..];
-    match hex.len() {
-        3 => {
-            // #RGB -> #RRGGBB
-            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-            Some([r, g, b, 255])
+    let parsed: Option<[u8; 4]> = (|| {
+        match hex.len() {
+            3 => {
+                // #RGB -> #RRGGBB
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                Some([r, g, b, 255])
+            }
+            4 => {
+                // #RGBA -> #RRGGBBAA
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
+                Some([r, g, b, a])
+            }
+            6 => {
+                // #RRGGBB
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some([r, g, b, 255])
+            }
+            8 => {
+                // #RRGGBBAA
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+                Some([r, g, b, a])
+            }
+            _ => None,
         }
-        4 => {
-            // #RGBA -> #RRGGBBAA
-            let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-            let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-            let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-            let a = u8::from_str_radix(&hex[3..4].repeat(2), 16).ok()?;
-            Some([r, g, b, a])
-        }
-        6 => {
-            // #RRGGBB
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            Some([r, g, b, 255])
-        }
-        8 => {
-            // #RRGGBBAA
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
-            Some([r, g, b, a])
-        }
-        // Fallback to white on any invalid length
-        _ => Some(DEFAULT_FALLBACK_BG),
-    }
-    .or(Some(DEFAULT_FALLBACK_BG))
+    })();
+
+    Some(parsed.unwrap_or(DEFAULT_FALLBACK_BG))
 }
 
 #[cfg(test)]
@@ -112,6 +110,9 @@ mod tests {
         assert_eq!(parse_bg_color(Some("default")), Some(DEFAULT_FALLBACK_BG));
         assert_eq!(parse_bg_color(Some("white")), Some(DEFAULT_FALLBACK_BG));
         assert_eq!(parse_bg_color(Some("invalid")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("#ggg")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("#12")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("#zzzzzz")), Some(DEFAULT_FALLBACK_BG));
 
         // #RGB
         assert_eq!(parse_bg_color(Some("#fff")), Some([255, 255, 255, 255]));

@@ -1,4 +1,4 @@
-//! Imvic: High-performance, modular, GPU-accelerated terminal image and vector viewer.
+//! Imvic: High-performance, modular terminal image viewer with terminal-native graphics presentation.
 
 use anyhow::Result;
 use clap::Parser;
@@ -122,6 +122,11 @@ impl InputCoalescer {
 
         dirty
     }
+
+    /// Checks if any terminal resize event was recorded in this frame tick.
+    fn has_resize(&self) -> bool {
+        self.resize.is_some()
+    }
 }
 
 fn main() -> Result<()> {
@@ -157,13 +162,19 @@ fn main() -> Result<()> {
     hud.offset = (viewport.offset_x, viewport.offset_y);
 
     // 6. Enter raw mode and alternate screen protected by RAII TerminalGuard
-    let guard = TerminalGuard::new()?;
+    let mut guard = TerminalGuard::new()?;
     let mut input_registry = InputRegistry::new();
 
     // 7. Initialize background live reload watcher if enabled
     let (watcher_tx, watcher_rx) = channel();
     let _watcher = if args.watch {
-        FileWatcher::new(&args.file, watcher_tx).ok()
+        match FileWatcher::new(&args.file, watcher_tx) {
+            Ok(watcher) => Some(watcher),
+            Err(err) => {
+                hud.set_error(format!("Watcher failed: {}", err));
+                None
+            }
+        }
     } else {
         None
     };
@@ -221,12 +232,19 @@ fn main() -> Result<()> {
                 should_quit = true;
             }
 
+            if coalescer.has_resize() {
+                guard.refresh_transport();
+            }
+
             if coalescer.apply(&mut viewport) {
                 dirty = true;
             }
         }
 
         if should_quit {
+            // Graceful exit: request active graphics backend to purge placed textures
+            let _ = backend.clear_graphics(&mut out, guard.transport());
+            let _ = out.flush();
             break;
         }
 
