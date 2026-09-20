@@ -151,6 +151,12 @@ impl TransportAdapter for TmuxTransport {
         self.cell_size
     }
 
+    fn refresh(&mut self) {
+        let (origin, cell_size) = Self::query_info();
+        self.origin = origin;
+        self.cell_size = cell_size;
+    }
+
     fn clone_box(&self) -> Box<dyn TransportAdapter> {
         Box::new(*self)
     }

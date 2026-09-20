@@ -17,7 +17,7 @@ use std::time::Duration;
 
 static PANIC_HOOK_SET: AtomicBool = AtomicBool::new(false);
 
-/// Kitty Graphics Protocol escape sequence to universally purge all placed GPU textures.
+/// Kitty Graphics Protocol escape sequence to universally purge all placed terminal graphic resources.
 ///
 /// Breakdown:
 /// - `\x1b_G`: Kitty APC (Application Program Command) graphics payload initiator.
@@ -43,21 +43,36 @@ pub struct TerminalGuard {
 impl TerminalGuard {
     /// Initializes terminal environment: enters alternate screen, enables raw mode,
     /// hides cursor, enables mouse capture, and registers custom panic hook.
+    ///
+    /// Guarantees safe rollback to cooked mode if any intermediate initialization step fails.
     pub fn new() -> Result<Self> {
         Self::setup_panic_hook();
 
         enable_raw_mode()?;
 
         let mut out = stdout();
-        crossterm::execute!(
+        if let Err(err) = crossterm::execute!(
             out,
             EnterAlternateScreen,
             Hide,
             EnableMouseCapture,
             // Disable auto line-wrap to prevent scrolling artifacts when drawing on the rightmost edge
             DisableLineWrap
-        )?;
-        out.flush()?;
+        )
+        .and_then(|_| out.flush())
+        {
+            // Rollback: restore cooked mode and reset any partially set terminal state
+            let _ = crossterm::execute!(
+                out,
+                Show,
+                DisableMouseCapture,
+                EnableLineWrap,
+                LeaveAlternateScreen
+            );
+            let _ = out.flush();
+            let _ = disable_raw_mode();
+            return Err(err.into());
+        }
 
         let transport = detect_transport();
 
@@ -69,24 +84,43 @@ impl TerminalGuard {
         self.transport.as_ref()
     }
 
+    /// Refreshes dynamic properties of the active transport adapter (e.g. on window/pane resize).
+    pub fn refresh_transport(&mut self) {
+        self.transport.refresh();
+    }
+
     /// Registers custom panic hook to restore terminal state before printing backtrace.
+    ///
+    /// Reproduces the full hermetic teardown sequence (mouse disable, terminal graphics purge,
+    /// stdin drainage, alternate screen exit, and cooked mode restoration) even under `panic = "abort"`.
     fn setup_panic_hook() {
         if !PANIC_HOOK_SET.swap(true, Ordering::SeqCst) {
             let default_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |panic_info| {
-                // Emergency cleanup: restore cooked mode and leave alternate screen
-                let _ = disable_raw_mode();
                 let mut out = stdout();
-                let _ = crossterm::execute!(
-                    out,
-                    DisableMouseCapture,
-                    Show,
-                    EnableLineWrap,
-                    LeaveAlternateScreen
-                );
+
+                // Stage 1: Disable mouse tracking escape sequences immediately
+                let _ = crossterm::execute!(out, DisableMouseCapture);
                 let _ = out.flush();
 
-                // Forward to standard panic logger
+                // Stage 2: Clear placed terminal graphics and make cursor visible
+                let transport = detect_transport();
+                let wrapped_clear = transport.wrap_escape(KITTY_CLEAR_ALL_GRAPHICS);
+                let _ = out.write_all(&wrapped_clear);
+                let _ = crossterm::execute!(out, Show);
+                let _ = out.flush();
+
+                // Stage 3: Drain pending stdin packets to prevent shell leakage
+                while let Ok(true) = poll(STDIN_DRAIN_TIMEOUT) {
+                    let _ = read();
+                }
+
+                // Stage 4: Leave alternate screen, restore line wrap, and restore cooked mode
+                let _ = crossterm::execute!(out, EnableLineWrap, LeaveAlternateScreen);
+                let _ = out.flush();
+                let _ = disable_raw_mode();
+
+                // Forward to standard panic logger to print clean backtrace to stderr
                 default_hook(panic_info);
             }));
         }
@@ -101,7 +135,7 @@ impl Drop for TerminalGuard {
         let _ = crossterm::execute!(out, DisableMouseCapture);
         let _ = out.flush();
 
-        // Stage 2: Clear placed GPU graphics and make cursor visible
+        // Stage 2: Clear placed terminal graphics and make cursor visible
         let wrapped_clear = self.transport.wrap_escape(KITTY_CLEAR_ALL_GRAPHICS);
         let _ = out.write_all(&wrapped_clear);
         let _ = crossterm::execute!(out, Show);

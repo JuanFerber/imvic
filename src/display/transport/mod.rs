@@ -41,6 +41,9 @@ pub trait TransportAdapter: Send + Sync {
         None
     }
 
+    /// Refreshes cached dynamic geometry (pane origins, cell dimensions) if supported.
+    fn refresh(&mut self) {}
+
     /// Clones this transport into a trait object.
     fn clone_box(&self) -> Box<dyn TransportAdapter>;
 }
