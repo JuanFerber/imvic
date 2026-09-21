@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 /// Capacity of the standard output buffer in bytes (256 KB).
 ///
-/// Pre-allocating a large buffer ensures high-throughput graphics payloads flush in single system calls.
+/// Pre-allocating a large buffer batches graphics payloads and minimizes flush operations.
 const STDOUT_BUFFER_CAPACITY: usize = 256 * 1024;
 
 /// Maximum number of crossterm input events to drain within a single frame tick.
@@ -242,9 +242,6 @@ fn main() -> Result<()> {
         }
 
         if should_quit {
-            // Graceful exit: request active graphics backend to purge placed textures
-            let _ = backend.clear_graphics(&mut out, guard.transport());
-            let _ = out.flush();
             break;
         }
 

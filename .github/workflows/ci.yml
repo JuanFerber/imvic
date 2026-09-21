@@ -9,7 +9,7 @@ on:
 
 jobs:
   test:
-    name: Build & Test
+    name: Build & Test (Stable)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -30,4 +30,23 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run automated test suite
+        run: cargo test --all-targets
+
+  msrv:
+    name: Verify MSRV (Rust 1.85.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust 1.85.0 toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache dependencies and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check compilation on MSRV
+        run: cargo check --all-targets
+
+      - name: Run automated test suite on MSRV
         run: cargo test --all-targets

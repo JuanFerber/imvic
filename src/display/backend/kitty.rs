@@ -14,7 +14,7 @@ const CHUNK_SIZE: usize = 4096;
 const INITIAL_PNG_CAPACITY: usize = 256 * 1024;
 const INITIAL_B64_CAPACITY: usize = 384 * 1024;
 
-/// Graphics backend targeting Kitty, Ghostty, and WezTerm via the Kitty Graphics Protocol.
+/// Graphics backend implementing the Kitty Graphics Protocol.
 #[derive(Clone)]
 pub struct KittyBackend {
     /// Preallocated scratch buffer for in-memory PNG compression.
@@ -175,7 +175,7 @@ impl GraphicsBackend for KittyBackend {
 
             let raw_escape = if is_first {
                 if is_mux {
-                    // Virtual placement (U=1) for multiplexers: image is stored in Kitty GPU memory
+                    // Virtual placement (U=1) for multiplexers: image is stored in Kitty terminal memory
                     // without drawing at arbitrary coordinates, anchored strictly to text buffer cells.
                     format!(
                         "\x1b_Ga=T,f=100,t=d,i={},U=1,C=1,c={},r={},q=2,m={};{}\x1b\\",

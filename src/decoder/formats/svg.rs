@@ -258,7 +258,7 @@ impl ImageSource for SvgImageSource {
                 None => return RgbaImage::new(target_w, target_h),
             };
 
-        // Hardware-accelerated background fill
+        // Canvas background fill
         let is_opaque_bg = matches!(bg_color, Some([_, _, _, 255]));
         if let Some([r, g, b, a]) = bg_color {
             let c = resvg::tiny_skia::Color::from_rgba8(r, g, b, a);
@@ -272,7 +272,7 @@ impl ImageSource for SvgImageSource {
 
         // 5. Alpha Demultiplication Bypass (only if canvas has semi-transparent pixels)
         if !is_opaque_bg {
-            for chunk in state.scratch[..needed_bytes].as_chunks_mut::<4>().0 {
+            for chunk in state.scratch[..needed_bytes].chunks_exact_mut(4) {
                 let a = chunk[3];
                 if a > 0 && a < 255 {
                     let a_f = a as f32 / 255.0;

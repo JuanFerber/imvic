@@ -40,12 +40,12 @@ impl DecoderRegistry {
 
     /// Inspects file path and initial header bytes to locate a capable decoder.
     pub fn find_decoder(&self, path: &Path) -> Result<&dyn FormatDecoder> {
+        let mut file = File::open(path).with_context(|| format!("Failed to open {:?}", path))?;
+
         let mut header = [0u8; HEADER_PROBE_SIZE];
-        let bytes_read = if let Ok(mut file) = File::open(path) {
-            file.read(&mut header).unwrap_or(0)
-        } else {
-            0
-        };
+        let bytes_read = file
+            .read(&mut header)
+            .with_context(|| format!("Failed to read header from {:?}", path))?;
 
         let valid_header = &header[..bytes_read];
 
@@ -93,17 +93,41 @@ mod tests {
     #[test]
     fn test_registry_finds_svg() {
         let registry = DecoderRegistry::new();
-        let path = Path::new("test_drawing.svg");
-        let decoder = registry.find_decoder(path);
+        let temp_path = std::env::temp_dir().join("imvic_test_drawing.svg");
+        std::fs::write(&temp_path, b"<svg></svg>").unwrap();
+
+        let decoder = registry.find_decoder(&temp_path);
         assert!(decoder.is_ok());
         assert_eq!(decoder.unwrap().name(), "SVG Vector Decoder");
+
+        let _ = std::fs::remove_file(&temp_path);
     }
 
     #[test]
     fn test_registry_unsupported_format() {
         let registry = DecoderRegistry::new();
-        let path = Path::new("unsupported.xyz");
+        let temp_path = std::env::temp_dir().join("imvic_unsupported.xyz");
+        std::fs::write(&temp_path, b"unsupported raw content").unwrap();
+
+        let result = registry.find_decoder(&temp_path);
+        let Err(err) = result else {
+            panic!("Expected unsupported format error");
+        };
+        assert!(err.to_string().contains("Unsupported file format"));
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_registry_nonexistent_file() {
+        let registry = DecoderRegistry::new();
+        let path = Path::new("definitely_nonexistent_file_12345.xyz");
         let result = registry.find_decoder(path);
-        assert!(result.is_err());
+        let Err(err) = result else {
+            panic!("Expected I/O open error");
+        };
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("Failed to open"));
+        assert!(!err_msg.contains("Unsupported file format"));
     }
 }

@@ -20,7 +20,7 @@ pub trait GraphicsBackend: Send + Sync {
     /// Criterion 2: Checks if the graphics protocol is natively supported and active in the host terminal.
     fn is_protocol_available(&self) -> bool;
 
-    /// Draws a frame to the terminal using native GPU pixel rendering.
+    /// Draws a frame to the terminal using native graphics protocol.
     fn draw_image(
         &mut self,
         writer: &mut dyn Write,
@@ -29,7 +29,7 @@ pub trait GraphicsBackend: Send + Sync {
         target_cells: (u16, u16),
     ) -> Result<()>;
 
-    /// Clears graphics placed on the terminal screen/GPU.
+    /// Clears graphics placed on the terminal screen.
     fn clear_graphics(
         &mut self,
         writer: &mut dyn Write,
@@ -83,7 +83,7 @@ impl BackendRegistry {
             None => {
                 bail!(
                     "High-resolution graphics protocol not detected in current terminal.\n\
-                         Imvic requires native GPU graphics rendering to guarantee pin-sharp vector display.\n\n\
+                         Imvic requires a native terminal graphics protocol to guarantee pin-sharp display.\n\n\
                          Supported terminals:\n\
                            - Kitty (https://sw.kovidgoyal.net/kitty/) [standalone or inside multiplexers]\n\
                            - (Note: Ghostty and WezTerm plugins can be registered in BackendRegistry)"

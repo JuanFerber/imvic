@@ -1,6 +1,6 @@
 //! Background file watcher for automatic live-reloading.
 //!
-//! Monitors target files on disk with a 200ms debounce filter
+//! Monitors target files on disk with a 200ms event rate limiter
 //! to handle partial editor saves without crashing.
 
 use crate::input::AppEvent;
@@ -11,9 +11,9 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Default debounce duration to prevent reading partially written files
+/// Default rate limit duration to prevent reading partially written files
 /// while text editors or formatters flush buffers to disk.
-const DEFAULT_DEBOUNCE_DURATION: Duration = Duration::from_millis(200);
+const DEFAULT_RATE_LIMIT_DURATION: Duration = Duration::from_millis(200);
 
 /// Background file system watcher.
 pub struct FileWatcher {
@@ -21,7 +21,7 @@ pub struct FileWatcher {
 }
 
 impl FileWatcher {
-    /// Spawns a background watcher thread on the target file with 200ms debounce.
+    /// Spawns a background watcher thread on the target file with 200ms event rate limiting.
     pub fn new(path: &Path, tx: Sender<AppEvent>) -> Result<Self> {
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let watched_file_name = canonical_path.file_name().map(|n| n.to_os_string());
@@ -47,7 +47,7 @@ impl FileWatcher {
                     && let Ok(mut last_time) = last_event_time.lock()
                 {
                     let now = Instant::now();
-                    if now.duration_since(*last_time) >= DEFAULT_DEBOUNCE_DURATION {
+                    if now.duration_since(*last_time) >= DEFAULT_RATE_LIMIT_DURATION {
                         *last_time = now;
                         let _ = tx.send(AppEvent::FileModified);
                     }
