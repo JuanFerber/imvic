@@ -272,7 +272,7 @@ impl ImageSource for SvgImageSource {
 
         // 5. Alpha Demultiplication Bypass (only if canvas has semi-transparent pixels)
         if !is_opaque_bg {
-            for chunk in state.scratch[..needed_bytes].chunks_exact_mut(4) {
+            for chunk in state.scratch[..needed_bytes].as_chunks_mut::<4>().0 {
                 let a = chunk[3];
                 if a > 0 && a < 255 {
                     let a_f = a as f32 / 255.0;
