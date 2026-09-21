@@ -31,11 +31,11 @@ notify = "8.2"
 anyhow = "1.0"
 
 # Optimize heavy third-party graphics/SIMD dependencies (resvg, tiny-skia, image)
-# even during development to maintain 60-144 FPS while keeping local incremental builds fast.
+# even during development to maintain smooth interactive framerates while keeping local incremental builds fast.
 [profile.dev.package."*"]
 opt-level = 3
 
-# Aggressive release profile for vector rasterization and zero-latency terminal display:
+# Aggressive release profile for vector rasterization and minimal latency terminal display:
 # - opt-level = 3: Enables aggressive loop unrolling and SIMD auto-vectorization.
 # - lto = "thin": Cross-crate Link-Time Optimization without exorbitant build times.
 # - codegen-units = 1: Single code generation unit to maximize global optimization scope.

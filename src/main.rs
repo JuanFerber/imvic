@@ -34,7 +34,7 @@ const IDLE_POLL_TIMEOUT: Duration = Duration::from_millis(16);
 /// Assumes a standard 1:2 aspect ratio monospace font matrix.
 const DEFAULT_CELL_PIXEL_SIZE: (u16, u16) = (11, 22);
 
-/// Coalesces high-frequency touchpad and crossterm events within a single 144 Hz frame tick.
+/// Coalesces high-frequency touchpad and crossterm events within a single frame tick.
 #[derive(Debug, Default)]
 struct InputCoalescer {
     /// Accumulated horizontal pan displacement in terminal columns.

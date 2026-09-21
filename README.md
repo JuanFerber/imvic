@@ -17,7 +17,7 @@
 - **Transparent Multiplexer Passthrough (TMUX):** Automatically detects `$TMUX` and wraps escape payloads in DCS passthrough sequences (`\x1bPtmux;\x1b...`), utilizing Unicode placeholders (`U+10EEEE`) and querying pane origin/cell geometry dynamically upon terminal resize.
 - **Multi-Format Extensible Decoder Registry:**
   - **Vector (SVG):** Crisp mathematical rendering at arbitrary zoom levels via `resvg` and `tiny-skia` with frustum culling and adaptive overdraw cache.
-  - **Raster:** Crop-and-resize camera rendering for **PNG**, **JPEG**, **WebP**, **GIF**, and **BMP** via `image`.
+  - **Raster:** Crop-and-resize camera rendering for **PNG**, **JPEG**, **WebP**, **GIF** (static first-frame in v0.1.0), and **BMP** via `image`.
 - **Sub-Pixel Camera & Logarithmic Focal Zoom:** Reciprocal multiplicative zoom steps provide smooth, reversible zooming around the cursor while preserving sub-pixel focal invariance, pan deltas scaled to zoom factor, and boundary clamping.
 - **Terminal Safety & Hermetic Teardown:**
   - `TerminalGuard` with transactional rollback to cooked mode on initialization failure.

@@ -22,7 +22,7 @@ static PANIC_HOOK_SET: AtomicBool = AtomicBool::new(false);
 /// Breakdown:
 /// - `\x1b_G`: Kitty APC (Application Program Command) graphics payload initiator.
 /// - `a=d`: Action is Delete.
-/// - `d=A`: Delete all images across all virtual screens and z-indexes.
+/// - `d=A`: Purge visible image placements on the active screen buffer.
 /// - `\x1b\\`: Standard ANSI ST (String Terminator).
 ///
 /// Emitted during teardown as a fail-safe to guarantee no lingering visual artifacts

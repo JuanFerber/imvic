@@ -78,7 +78,7 @@ impl GraphicsBackend for KittyBackend {
             return Ok(());
         }
 
-        // 1. Reuse scratch buffer to encode raw RGBA bytes into PNG with zero allocations
+        // 1. Reuse scratch buffer to encode raw RGBA bytes into PNG, avoiding repeated allocations
         self.png_buffer.clear();
         let encoder = PngEncoder::new_with_quality(
             &mut self.png_buffer,

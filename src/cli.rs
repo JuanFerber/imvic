@@ -22,7 +22,7 @@ pub struct CliArgs {
     pub watch: bool,
 
     /// Initial zoom or scale factor override
-    #[arg(short = 's', long = "scale")]
+    #[arg(short = 's', long = "scale", value_parser = parse_scale)]
     pub scale: Option<f32>,
 
     /// Optional canvas background color in hex format (#RGB, #RGBA, #RRGGBB, #RRGGBBAA).
@@ -37,12 +37,48 @@ pub struct CliArgs {
     pub bg: Option<String>,
 
     /// Target framerate limit in FPS (e.g. 30, 60, 144). Defaults to uncapped/native.
-    #[arg(long = "fps", value_name = "FPS")]
+    #[arg(long = "fps", value_name = "FPS", value_parser = parse_fps)]
     pub fps: Option<u32>,
 }
 
 /// Default solid white canvas background fallback [R, G, B, A].
 pub const DEFAULT_FALLBACK_BG: [u8; 4] = [255, 255, 255, 255];
+
+/// Parses and validates the CLI scale factor.
+///
+/// Ensures the scale multiplier is strictly positive and finite.
+pub fn parse_scale(val: &str) -> Result<f32, String> {
+    let scale: f32 = val
+        .parse()
+        .map_err(|_| format!("Invalid scale value '{}': must be a valid number", val))?;
+
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(format!(
+            "Invalid scale factor '{}': scale must be a finite number greater than 0",
+            val
+        ));
+    }
+
+    Ok(scale)
+}
+
+/// Parses and validates the CLI framerate limit.
+///
+/// Ensures the framerate is strictly positive and within sane display boundaries (1..=240).
+pub fn parse_fps(val: &str) -> Result<u32, String> {
+    let fps: u32 = val
+        .parse()
+        .map_err(|_| format!("Invalid FPS value '{}': must be a positive integer", val))?;
+
+    if fps == 0 || fps > 240 {
+        return Err(format!(
+            "Invalid framerate '{}': FPS must be between 1 and 240",
+            val
+        ));
+    }
+
+    Ok(fps)
+}
 
 /// Parses an optional CLI background string into an RGBA byte array.
 ///
@@ -127,5 +163,37 @@ mod tests {
         // #RRGGBBAA
         assert_eq!(parse_bg_color(Some("#1e1e2eff")), Some([30, 30, 46, 255]));
         assert_eq!(parse_bg_color(Some("#00000000")), Some([0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn test_parse_scale_valid() {
+        assert_eq!(parse_scale("1.0"), Ok(1.0));
+        assert_eq!(parse_scale("0.5"), Ok(0.5));
+        assert_eq!(parse_scale("10"), Ok(10.0));
+    }
+
+    #[test]
+    fn test_parse_scale_invalid() {
+        assert!(parse_scale("0").is_err());
+        assert!(parse_scale("-1.5").is_err());
+        assert!(parse_scale("NaN").is_err());
+        assert!(parse_scale("inf").is_err());
+        assert!(parse_scale("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_fps_valid() {
+        assert_eq!(parse_fps("30"), Ok(30));
+        assert_eq!(parse_fps("60"), Ok(60));
+        assert_eq!(parse_fps("144"), Ok(144));
+        assert_eq!(parse_fps("240"), Ok(240));
+    }
+
+    #[test]
+    fn test_parse_fps_invalid() {
+        assert!(parse_fps("0").is_err());
+        assert!(parse_fps("241").is_err());
+        assert!(parse_fps("-60").is_err());
+        assert!(parse_fps("invalid").is_err());
     }
 }
