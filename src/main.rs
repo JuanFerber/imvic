@@ -41,7 +41,7 @@ struct InputCoalescer {
     pan_dx: f32,
     /// Accumulated vertical pan displacement in terminal rows.
     pan_dy: f32,
-    /// Multiplicative compound zoom factor (calibrated to Weber-Fechner scale).
+    /// Compound multiplicative zoom factor accumulated during event coalescing.
     zoom_factor: f32,
     /// Anchor cursor cell coordinates for the compounded focal zoom.
     last_zoom_cursor: Option<(u16, u16)>,

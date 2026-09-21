@@ -1,12 +1,13 @@
 # imvic (Image Viewer CLI)
 
+[![CI](https://github.com/JuanFerber/imvic/actions/workflows/ci.yml/badge.svg)](https://github.com/JuanFerber/imvic/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Rust: 2024 Edition](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org/)
 [![Clippy: Clean](https://img.shields.io/badge/Clippy-0%20warnings-brightgreen.svg)]()
 
 > **High-performance, modular terminal image viewer with terminal-native graphics presentation and adaptive CPU rasterization.**
 
-`imvic` is an interactive image and vector viewer built from the ground up in Rust for modern terminal emulators supporting graphics protocols. It delivers monitor-native resolution rendering, smooth focal zoom, continuous panning, and robust terminal safety invariants.
+`imvic` is an interactive image and vector viewer built in Rust for modern terminal emulators supporting graphics protocols. It renders frames at the terminal's reported cell-pixel resolution, featuring smooth focal zoom, continuous panning, and robust terminal safety invariants.
 
 ---
 
@@ -16,22 +17,23 @@
 * **Transparent Multiplexer Passthrough (TMUX):** Automatically detects `$TMUX` and wraps escape payloads in DCS passthrough sequences (`\x1bPtmux;\x1b...`), utilizing Unicode placeholders (`U+10EEEE`) and querying pane origin/cell geometry dynamically upon terminal resize.
 * **Multi-Format Extensible Decoder Registry:**
   * **Vector (SVG):** Crisp mathematical rendering at arbitrary zoom levels via `resvg` and `tiny-skia` with frustum culling and adaptive overdraw cache.
-  * **Raster:** Instant decoding and affine-transformed camera projection for **PNG**, **JPEG**, **WebP**, **GIF**, and **BMP** via `image-rs`.
-* **Sub-Pixel Camera & Focal Zoom:** Mathematically verified zoom-to-cursor invariance based on the Weber-Fechner law, logarithmic reversibility cycles, pan deltas proportional to zoom scale, and boundary clamping.
-* **Terminal Safety & Hermetic RAII Invariants:**
+  * **Raster:** Crop-and-resize camera rendering for **PNG**, **JPEG**, **WebP**, **GIF**, and **BMP** via `image`.
+* **Sub-Pixel Camera & Logarithmic Focal Zoom:** Reciprocal multiplicative zoom steps provide smooth, reversible zooming around the cursor while preserving sub-pixel focal invariance, pan deltas scaled to zoom factor, and boundary clamping.
+* **Terminal Safety & Hermetic Teardown:**
   * `TerminalGuard` with transactional rollback to cooked mode on initialization failure.
-  * 4-stage panic hook that restores the cursor, purges terminal graphic resources, drains pending `stdin` escape sequences (preventing leaked bytes like `;23M` in `zsh`), and leaves the alternate screen before printing the backtrace.
-* **Hot-Path Memory Optimization:** Reusable scratch buffers for PNG compression and Base64 encoding eliminate per-frame allocations in interactive loops. Frame output is written via a buffered system call in a single atomic flush.
+  * 4-stage RAII teardown on exit (disabling mouse tracking, purging terminal graphics, draining pending `stdin` escape sequences, and restoring cooked mode).
+  * Panic hook that restores terminal state and drains `stdin` to prevent leaked escape sequences (such as `;23M` in `zsh`) before printing the backtrace.
+* **Hot-Path Memory Optimization:** Reusable scratch buffers for PNG compression and Base64 encoding reduce repeated per-frame allocations in the encoding path. Frame output uses buffered writing with a single top-level flush per rendered frame.
 * **Resilient Live Reload (`--watch`):** Watches the parent directory with a 200 ms debounce to survive atomic file replacements. If a file is saved with syntax errors, `imvic` preserves the last valid frame and alerts the user via the HUD.
 
 ---
 
 ## Verified Environments
 
-| Environment | Mode | Status | Notes |
+| Environment / Transport | Mode | Status | Notes |
 | :--- | :--- | :--- | :--- |
-| **Kitty** | Native Graphics | **Verified** | Primary reference implementation and verified target. |
-| **TMUX** | DCS Passthrough | **Verified** | Verified inside TMUX with `set -g allow-passthrough on`. |
+| **Kitty** | Native Graphics Protocol | **Verified** | Primary reference implementation and verified target. |
+| **Kitty + TMUX** | DCS Passthrough | **Verified** | Verified inside TMUX with `set -g allow-passthrough on`. |
 
 *Note: Other terminal emulators implementing the Kitty Graphics Protocol (such as Ghostty or WezTerm) are target platforms whose specific conformance is undergoing progressive testing.*
 
@@ -62,12 +64,12 @@ cargo install --path .
 imvic photo.png
 imvic diagram.svg
 
-# Enable live reload (automatically updates when the file changes on disk)
+# Enable live reload (opt-in: automatically updates when the file changes on disk)
 imvic --watch drawing.svg
 
-# Override canvas background color (supports #RGB, #RGBA, #RRGGBB, #RRGGBBAA, or named colors)
+# Override canvas background color using hex format (#RGB, #RGBA, #RRGGBB, #RRGGBBAA)
 imvic --bg "#1e1e2e" illustration.png
-imvic --bg white icon.svg
+imvic --bg "#ffffff" icon.svg
 
 # Set initial zoom factor
 imvic --scale 2.0 blueprint.svg
@@ -83,7 +85,7 @@ imvic --fps 60 animation.png
 | `<FILE>` | *(Positional)* | Path to the image or vector file to display. |
 | `--watch` | `-w` | Watch file for changes and reload view automatically (Live Reload). |
 | `--scale` | `-s <FACTOR>` | Initial zoom or scale factor override (e.g. `1.5`, `2.0`). |
-| `--bg` | `-b <COLOR>` | Canvas background color in hex format or `white`/`black`/`transparent`. |
+| `--bg` | `-b <HEX>` | Canvas background color in `#RGB`, `#RGBA`, `#RRGGBB`, or `#RRGGBBAA` format. |
 | `--fps` | `--fps <FPS>` | Target framerate limit in FPS (e.g. `30`, `60`, `144`). Defaults to uncapped. |
 
 ---
@@ -92,8 +94,8 @@ imvic --fps 60 animation.png
 
 | Input Gesture | Action | Description |
 | :--- | :--- | :--- |
-| **Touchpad Pinch / Ctrl + Mouse Wheel** | **Focal Zoom** | Smooth zoom centered around current cursor position (Weber-Fechner logarithmic steps). |
-| **Touchpad 2-Finger Scroll** | **Continuous Pan** | Smooth 2D directional panning across the canvas. |
+| **Ctrl + Scroll / Ctrl + Mouse Wheel** | **Focal Zoom** | Smooth zoom centered around current cursor position with reciprocal steps. |
+| **Mouse / Trackpad Scroll** | **Continuous Pan** | Smooth 2D directional panning across the canvas. |
 | **Mouse Left-Click Drag** | **Drag Pan** | Drags and shifts the canvas following cursor displacement. |
 | **`c`** / **`C`** / **`Home`** | **Center View** | Recenters the image and resets camera offset. |
 | **`q`** / **`Esc`** / **`Ctrl+C`** | **Quit** | Gracefully cleans up terminal graphics, drains stdin, and restores cooked mode. |
@@ -102,7 +104,7 @@ imvic --fps 60 animation.png
 
 ## Testing & Verification Discipline
 
-`imvic` enforces strict verification invariants: zero compiler warnings, zero linter warnings, and a pure mathematical test suite.
+`imvic` enforces strict verification invariants: zero compiler warnings, zero linter warnings, and a deterministic test suite.
 
 ```bash
 # 1. Type check and borrow check
@@ -117,13 +119,21 @@ cargo test
 
 ### Automated Tests Overview
 
-* **Unit Tests:** Format sniffing, SVG prologue validation, raster alpha blending, CLI hex parsing fallback cascade, HUD bounding box margins, and TMUX escape doubling.
+* **Format Decoders & Protocol Units:** Format sniffing, SVG prologue validation, raster alpha blending, CLI hex parsing fallback cascade, HUD bounding box margins, and TMUX escape wrapping.
 * **Mathematical Camera Invariants (`tests/viewport_math_tests.rs`):**
   * Sub-pixel focal invariance for arbitrary cursor coordinates.
   * Zoom-to-cursor invariance at center and edge positions.
-  * Logarithmic reversibility cycles (Weber-Fechner symmetry: `zoom_in * zoom_out ≈ 1.0`).
+  * Logarithmic reversibility cycles (reciprocal symmetry: `zoom_in * zoom_out ≈ 1.0`).
   * Pan delta scaling strictly proportional to camera zoom factor.
   * Clamping symmetry and boundary stability preventing lost canvas states.
+
+---
+
+## Current Limitations
+
+* **Graphics Backend:** The Kitty Graphics Protocol is currently the sole graphics backend implemented.
+* **Terminal Conformance:** Verified primarily on Kitty; Ghostty and WezTerm compatibility is undergoing progressive testing.
+* **CPU Rasterization:** Frame rendering and cropping currently execute on the CPU; persistent terminal GPU placements are planned for a subsequent release.
 
 ---
 

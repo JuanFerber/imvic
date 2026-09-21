@@ -14,8 +14,7 @@ pub struct TouchpadInputAdapter {
     last_drag_pos: Option<(u16, u16)>,
 }
 
-/// Symmetric logarithmic zoom step multipliers calibrated to the Weber-Fechner law
-/// of human sensory perception (approximately 120 smooth perceptual steps across the dynamic range).
+/// Symmetric multiplicative zoom step multipliers providing smooth logarithmic zoom control.
 ///
 /// Multiplier for focal zoom-in operations.
 pub const ZOOM_STEP_IN: f32 = 1.02528;
