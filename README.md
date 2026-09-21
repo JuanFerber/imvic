@@ -41,7 +41,7 @@ _Note: Other terminal emulators implementing the Kitty Graphics Protocol (such a
 
 ## Installation & Requirements
 
-Ensure you have a modern Rust toolchain installed (Rust 1.85+ / 2024 edition):
+Ensure you have a modern Rust toolchain installed (Rust 1.88+ / 2024 edition):
 
 ```bash
 # Clone the repository

@@ -33,14 +33,14 @@ jobs:
         run: cargo test --all-targets
 
   msrv:
-    name: Verify MSRV (Rust 1.85.0)
+    name: Verify MSRV (Rust 1.88.0)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Rust 1.85.0 toolchain
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Setup Rust 1.88.0 toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Cache dependencies and build artifacts
         uses: Swatinem/rust-cache@v2
