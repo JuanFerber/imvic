@@ -4,7 +4,7 @@
 
 use super::formats::raster::RasterDecoder;
 use super::formats::svg::SvgDecoder;
-use super::{FormatDecoder, ImageSource};
+use super::{DecodeMatch, FormatDecoder, ImageSource};
 use anyhow::{Context, Result, bail};
 use std::fs::File;
 use std::io::Read;
@@ -38,7 +38,7 @@ impl DecoderRegistry {
         self.decoders.push(decoder);
     }
 
-    /// Inspects file path and initial header bytes to locate a capable decoder.
+    /// Inspects file path and initial header bytes to locate the best matching decoder.
     pub fn find_decoder(&self, path: &Path) -> Result<&dyn FormatDecoder> {
         let mut file = File::open(path).with_context(|| format!("Failed to open {:?}", path))?;
 
@@ -49,28 +49,68 @@ impl DecoderRegistry {
 
         let valid_header = &header[..bytes_read];
 
-        for decoder in &self.decoders {
-            if decoder.can_decode(path, valid_header) {
-                return Ok(decoder.as_ref());
+        // Pick decoder with highest match score
+        let best_decoder = self
+            .decoders
+            .iter()
+            .map(|d| (d.as_ref(), d.match_score(path, valid_header)))
+            .filter(|(_, score)| *score > DecodeMatch::None)
+            .max_by_key(|(_, score)| *score);
+
+        if let Some((decoder, _)) = best_decoder {
+            Ok(decoder)
+        } else {
+            bail!(
+                "Unsupported file format for {:?}. No decoder plugin recognized the file extension or header.",
+                path
+            )
+        }
+    }
+
+    /// Finds candidate decoders sorted by confidence and decodes the file with fallback.
+    pub fn decode(&self, path: &Path) -> Result<Arc<dyn ImageSource>> {
+        let mut file = File::open(path).with_context(|| format!("Failed to open {:?}", path))?;
+
+        let mut header = [0u8; HEADER_PROBE_SIZE];
+        let bytes_read = file
+            .read(&mut header)
+            .with_context(|| format!("Failed to read header from {:?}", path))?;
+
+        let valid_header = &header[..bytes_read];
+
+        // Gather all matching decoders and sort descending by confidence (MagicBytes before ExtensionOnly)
+        let mut candidates: Vec<(&dyn FormatDecoder, DecodeMatch)> = self
+            .decoders
+            .iter()
+            .map(|d| (d.as_ref(), d.match_score(path, valid_header)))
+            .filter(|(_, score)| *score > DecodeMatch::None)
+            .collect();
+
+        candidates.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+        if candidates.is_empty() {
+            bail!(
+                "Unsupported file format for {:?}. No decoder plugin recognized the file extension or header.",
+                path
+            );
+        }
+
+        // Attempt decoding in order of match quality (cascade fallback)
+        let mut last_error = None;
+        for (decoder, _) in candidates {
+            match decoder.decode(path) {
+                Ok(source) => return Ok(source),
+                Err(err) => {
+                    last_error = Some(err.context(format!(
+                        "Plugin '{}' failed to decode {:?}",
+                        decoder.name(),
+                        path
+                    )));
+                }
             }
         }
 
-        bail!(
-            "Unsupported file format for {:?}. No decoder plugin recognized the file extension or header.",
-            path
-        )
-    }
-
-    /// Finds the appropriate decoder and decodes the file into an in-memory image source.
-    pub fn decode(&self, path: &Path) -> Result<Arc<dyn ImageSource>> {
-        let decoder = self.find_decoder(path)?;
-        decoder.decode(path).with_context(|| {
-            format!(
-                "Failed to decode {:?} using plugin '{}'",
-                path,
-                decoder.name()
-            )
-        })
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Decoding failed for {:?}", path)))
     }
 }
 
@@ -129,5 +169,50 @@ mod tests {
         let err_msg = err.to_string();
         assert!(err_msg.contains("Failed to open"));
         assert!(!err_msg.contains("Unsupported file format"));
+    }
+
+    #[test]
+    fn test_registry_svg_named_as_png_falls_back_correctly() {
+        let registry = DecoderRegistry::new();
+        let temp_path = std::env::temp_dir().join("imvic_trick_drawing.png");
+        // Archivo SVG válido pero con extensión .png
+        std::fs::write(
+            &temp_path,
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"></svg>",
+        )
+        .unwrap();
+
+        let source = registry.decode(&temp_path);
+        assert!(
+            source.is_ok(),
+            "Failed to decode SVG with .png extension: {:?}",
+            source.err()
+        );
+
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_registry_png_named_as_svg_falls_back_correctly() {
+        let registry = DecoderRegistry::new();
+        let temp_path = std::env::temp_dir().join("imvic_trick_raster.svg");
+        // PNG de 1x1 píxel válido pero con extensión .svg
+        let png_1x1 = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(&temp_path, &png_1x1).unwrap();
+
+        let source = registry.decode(&temp_path);
+        assert!(
+            source.is_ok(),
+            "Failed to decode PNG with .svg extension: {:?}",
+            source.err()
+        );
+
+        let _ = std::fs::remove_file(&temp_path);
     }
 }

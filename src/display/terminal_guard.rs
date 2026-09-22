@@ -29,11 +29,33 @@ static PANIC_HOOK_SET: AtomicBool = AtomicBool::new(false);
 /// remain in the terminal buffer after process exit.
 const KITTY_CLEAR_ALL_GRAPHICS: &[u8] = b"\x1b_Ga=d,d=A\x1b\\";
 
-/// Maximum time to poll `stdin` during teardown to consume in-flight mouse escape sequences.
+/// Maximum wall-clock time allowed for draining pending stdin packets during teardown.
+const MAX_DRAIN_DURATION: Duration = Duration::from_millis(50);
+
+/// Maximum number of crossterm events consumed during stdin drain.
+const MAX_DRAIN_EVENTS: usize = 64;
+
+/// Timeout for individual event polling during the teardown drain phase.
+const DRAIN_POLL_TIMEOUT: Duration = Duration::from_millis(5);
+
+/// Actively drains pending stdin packets with an absolute deadline and event limit.
 ///
-/// 15 milliseconds is calibrated to exceed terminal emulator packet latency for trailing
-/// mouse release events (e.g. SGR 1006 escape sequences) while remaining unnoticeable to the user.
-const STDIN_DRAIN_TIMEOUT: Duration = Duration::from_millis(15);
+/// Prevents trailing mouse escape sequences (e.g. `;23M`) from leaking into the shell
+/// while guaranteeing the process never hangs indefinitely if stdin is flooded.
+fn drain_stdin() {
+    let deadline = std::time::Instant::now() + MAX_DRAIN_DURATION;
+    let mut drained_count = 0;
+
+    while std::time::Instant::now() < deadline && drained_count < MAX_DRAIN_EVENTS {
+        match poll(DRAIN_POLL_TIMEOUT) {
+            Ok(true) => {
+                let _ = read();
+                drained_count += 1;
+            }
+            _ => break,
+        }
+    }
+}
 
 /// RAII guard managing raw mode, alternate screen, mouse capture, and safe teardown.
 pub struct TerminalGuard {
@@ -111,9 +133,7 @@ impl TerminalGuard {
                 let _ = out.flush();
 
                 // Stage 3: Drain pending stdin packets to prevent shell leakage
-                while let Ok(true) = poll(STDIN_DRAIN_TIMEOUT) {
-                    let _ = read();
-                }
+                drain_stdin();
 
                 // Stage 4: Leave alternate screen, restore line wrap, and restore cooked mode
                 let _ = crossterm::execute!(out, EnableLineWrap, LeaveAlternateScreen);
@@ -143,9 +163,7 @@ impl Drop for TerminalGuard {
 
         // Stage 3: ACTIVELY DRAIN STDIN to prevent trailing mouse packets (e.g. ;23M)
         // from leaking into the user's shell (zsh/bash).
-        while let Ok(true) = poll(STDIN_DRAIN_TIMEOUT) {
-            let _ = read();
-        }
+        drain_stdin();
 
         // Stage 4: Leave alternate screen, restore line wrap, and restore cooked mode
         let _ = crossterm::execute!(out, EnableLineWrap, LeaveAlternateScreen);

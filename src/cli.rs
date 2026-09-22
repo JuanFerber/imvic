@@ -94,6 +94,13 @@ pub fn parse_bg_color(arg: Option<&str>) -> Option<[u8; 4]> {
     }
 
     let hex = &raw[1..];
+
+    // Guarantee that every character is a single-byte ASCII hex digit (0-9, a-f, A-F).
+    // This prevents slicing panics on multi-byte UTF-8 sequences (e.g. "#aébcd").
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(DEFAULT_FALLBACK_BG);
+    }
+
     let parsed: Option<[u8; 4]> = (|| {
         match hex.len() {
             3 => {
@@ -149,6 +156,11 @@ mod tests {
         assert_eq!(parse_bg_color(Some("#ggg")), Some(DEFAULT_FALLBACK_BG));
         assert_eq!(parse_bg_color(Some("#12")), Some(DEFAULT_FALLBACK_BG));
         assert_eq!(parse_bg_color(Some("#zzzzzz")), Some(DEFAULT_FALLBACK_BG));
+
+        // Multi-byte UTF-8 inputs (must never panic, must fall back to white)
+        assert_eq!(parse_bg_color(Some("#aébcd")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("#éabc")), Some(DEFAULT_FALLBACK_BG));
+        assert_eq!(parse_bg_color(Some("#🦀1234")), Some(DEFAULT_FALLBACK_BG));
 
         // #RGB
         assert_eq!(parse_bg_color(Some("#fff")), Some([255, 255, 255, 255]));

@@ -3,12 +3,21 @@
 //! Decodes static raster formats into an in-memory RGBA surface and performs
 //! fast, filtered sub-rectangle cropping for the viewport camera engine.
 
-use crate::decoder::{CropRect, FormatDecoder, ImageSource};
+use crate::decoder::{CropRect, DecodeMatch, FormatDecoder, ImageSource};
 use anyhow::{Context, Result};
 use image::imageops::{FilterType, crop_imm, overlay, resize};
-use image::{GenericImageView, Rgba, RgbaImage};
+use image::{GenericImageView, Limits, Rgba, RgbaImage};
 use std::path::Path;
 use std::sync::Arc;
+
+/// Maximum allowable pixel width for raster images (16K resolution boundary).
+const MAX_IMAGE_WIDTH: u32 = 16_384;
+
+/// Maximum allowable pixel height for raster images (16K resolution boundary).
+const MAX_IMAGE_HEIGHT: u32 = 16_384;
+
+/// Maximum heap allocation permitted for a single raster image (512 MiB).
+const MAX_IMAGE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Decoder plugin for common static raster image formats.
 pub struct RasterDecoder;
@@ -30,50 +39,48 @@ impl FormatDecoder for RasterDecoder {
         "Static Raster Image Decoder (PNG, JPEG, WebP, GIF, BMP)"
     }
 
-    fn can_decode(&self, path: &Path, header: &[u8]) -> bool {
-        // 1. Check file extensions
+    fn match_score(&self, path: &Path, header: &[u8]) -> DecodeMatch {
+        // 1. Check magic bytes first (high confidence)
+        if header.len() >= 8 {
+            if header.starts_with(b"\x89PNG\r\n\x1a\n")
+                || header.starts_with(b"\xff\xd8\xff")
+                || header.starts_with(b"GIF87a")
+                || header.starts_with(b"GIF89a")
+                || header.starts_with(b"BM")
+            {
+                return DecodeMatch::MagicBytes;
+            }
+            if header.starts_with(b"RIFF") && header.len() >= 12 && &header[8..12] == b"WEBP" {
+                return DecodeMatch::MagicBytes;
+            }
+        }
+
+        // 2. Check file extensions (lower confidence fallback)
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             let ext_lower = ext.to_ascii_lowercase();
             if matches!(
                 ext_lower.as_str(),
                 "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
             ) {
-                return true;
+                return DecodeMatch::ExtensionOnly;
             }
         }
 
-        // 2. Check magic bytes
-        if header.len() >= 8 {
-            // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-            if header.starts_with(b"\x89PNG\r\n\x1a\n") {
-                return true;
-            }
-            // JPEG signature: FF D8 FF
-            if header.starts_with(b"\xff\xd8\xff") {
-                return true;
-            }
-            // GIF signature: GIF87a or GIF89a
-            if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
-                return true;
-            }
-            // BMP signature: BM
-            if header.starts_with(b"BM") {
-                return true;
-            }
-            // WebP signature: RIFF....WEBP
-            if header.starts_with(b"RIFF") && header.len() >= 12 && &header[8..12] == b"WEBP" {
-                return true;
-            }
-        }
-
-        false
+        DecodeMatch::None
     }
 
     fn decode(&self, path: &Path) -> Result<Arc<dyn ImageSource>> {
-        let reader = image::ImageReader::open(path)
+        let mut reader = image::ImageReader::open(path)
             .with_context(|| format!("Failed to open image file at {:?}", path))?
             .with_guessed_format()
             .with_context(|| format!("Failed to determine format for {:?}", path))?;
+
+        // Defend against memory exhaustion / decompression bombs
+        let mut limits = Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_WIDTH);
+        limits.max_image_height = Some(MAX_IMAGE_HEIGHT);
+        limits.max_alloc = Some(MAX_IMAGE_ALLOC_BYTES);
+        reader.limits(limits);
 
         let dynamic_img = reader
             .decode()

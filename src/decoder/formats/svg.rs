@@ -2,7 +2,7 @@
 //!
 //! Provides dynamic vector rasterization at arbitrary zoom levels and viewports.
 
-use crate::decoder::{CropRect, FormatDecoder, ImageSource};
+use crate::decoder::{CropRect, DecodeMatch, FormatDecoder, ImageSource};
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use image::imageops::crop_imm;
@@ -71,21 +71,28 @@ impl FormatDecoder for SvgDecoder {
         "SVG Vector Decoder"
     }
 
-    fn can_decode(&self, path: &Path, header: &[u8]) -> bool {
+    fn match_score(&self, path: &Path, header: &[u8]) -> DecodeMatch {
+        // Header sniffing: must contain '<svg' tag or '<!doctype svg' declaration
+        let contains_svg_tag = header.windows(4).any(|w| w.eq_ignore_ascii_case(b"<svg"));
+        let contains_svg_doctype = header
+            .windows(13)
+            .any(|w| w.eq_ignore_ascii_case(b"<!doctype svg"));
+
+        if contains_svg_tag || contains_svg_doctype {
+            return DecodeMatch::MagicBytes;
+        }
+
         let has_svg_extension = path
             .extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.eq_ignore_ascii_case("svg"))
             .unwrap_or(false);
 
-        // Header sniffing: must contain '<svg' tag or '<!doctype svg' declaration
-        let contains_svg_tag = header.windows(4).any(|w| w.eq_ignore_ascii_case(b"<svg"));
-        let contains_svg_doctype = header
-            .windows(13)
-            .any(|w| w.eq_ignore_ascii_case(b"<!doctype svg"));
-        let has_svg_magic = contains_svg_tag || contains_svg_doctype;
-
-        has_svg_extension || has_svg_magic
+        if has_svg_extension {
+            DecodeMatch::ExtensionOnly
+        } else {
+            DecodeMatch::None
+        }
     }
 
     fn decode(&self, path: &Path) -> Result<Arc<dyn ImageSource>> {
@@ -287,34 +294,21 @@ impl ImageSource for SvgImageSource {
         let src_x = ((crop.x - cushion_crop.x) * scale_x).round().max(0.0) as u32;
         let src_y = ((crop.y - cushion_crop.y) * scale_y).round().max(0.0) as u32;
 
-        let output_image = if cushion_w == target_w
-            && cushion_h == target_h
-            && src_x == 0
-            && src_y == 0
-        {
-            match RgbaImage::from_raw(target_w, target_h, state.scratch[..needed_bytes].to_vec()) {
-                Some(img) => img,
-                None => RgbaImage::new(target_w, target_h),
-            }
-        } else {
-            let cushion_view = match RgbaImage::from_raw(
-                cushion_w,
-                cushion_h,
-                state.scratch[..needed_bytes].to_vec(),
-            ) {
-                Some(img) => img,
-                None => return RgbaImage::new(target_w, target_h),
-            };
-            let px = src_x.min(cushion_view.width().saturating_sub(target_w));
-            let py = src_y.min(cushion_view.height().saturating_sub(target_h));
-            crop_imm(&cushion_view, px, py, target_w, target_h).to_image()
+        // Zero-copy ownership transfer: take the scratch buffer without cloning
+        let mut pixels = std::mem::take(&mut state.scratch);
+        pixels.truncate(needed_bytes);
+
+        let cushion_image = match RgbaImage::from_raw(cushion_w, cushion_h, pixels) {
+            Some(img) => img,
+            None => return RgbaImage::new(target_w, target_h),
         };
 
-        // Cache 2.0x cushion for subsequent pan hits when stabilized
-        if !is_zooming
-            && let Some(cushion_image) =
-                RgbaImage::from_raw(cushion_w, cushion_h, state.scratch[..needed_bytes].to_vec())
-        {
+        let px = src_x.min(cushion_image.width().saturating_sub(target_w));
+        let py = src_y.min(cushion_image.height().saturating_sub(target_h));
+        let output_image = crop_imm(&cushion_image, px, py, target_w, target_h).to_image();
+
+        // Cache 2.0x cushion for subsequent pan hits when stabilized, or recycle buffer directly into scratch
+        if !is_zooming {
             state.cache = Some(SvgCache {
                 cushion_crop,
                 scale_x,
@@ -322,6 +316,8 @@ impl ImageSource for SvgImageSource {
                 bg_color,
                 image: cushion_image,
             });
+        } else {
+            state.scratch = cushion_image.into_raw();
         }
 
         output_image

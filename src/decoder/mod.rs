@@ -35,13 +35,35 @@ pub trait ImageSource: Send + Sync {
     ) -> RgbaImage;
 }
 
+/// Match confidence level for a format decoder against a candidate file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DecodeMatch {
+    /// Neither the file extension nor the header bytes were recognized.
+    None = 0,
+    /// Recognized strictly by file extension (lower confidence).
+    ExtensionOnly = 1,
+    /// Recognized by header signature or magic bytes (high confidence).
+    MagicBytes = 2,
+}
+
 /// Contract for image format decoder plugins.
 pub trait FormatDecoder: Send + Sync {
     /// Human-readable plugin name (e.g. "SVG Vector Decoder").
     fn name(&self) -> &'static str;
 
+    /// Evaluates match confidence based on file path and probed header bytes.
+    fn match_score(&self, path: &Path, header: &[u8]) -> DecodeMatch {
+        if self.can_decode(path, header) {
+            DecodeMatch::ExtensionOnly
+        } else {
+            DecodeMatch::None
+        }
+    }
+
     /// Inspects path and header bytes to determine if this plugin can decode the file.
-    fn can_decode(&self, path: &Path, header: &[u8]) -> bool;
+    fn can_decode(&self, path: &Path, header: &[u8]) -> bool {
+        self.match_score(path, header) > DecodeMatch::None
+    }
 
     /// Decodes the file into an in-memory image source.
     fn decode(&self, path: &Path) -> Result<Arc<dyn ImageSource>>;

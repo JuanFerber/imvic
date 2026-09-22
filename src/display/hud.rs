@@ -6,6 +6,20 @@
 use anyhow::Result;
 use std::io::Write;
 
+/// Sanitizes external text strings by replacing ASCII control characters (c < 0x20)
+/// and DEL (0x7F) with spaces to prevent ANSI escape sequence injection in terminal emulators.
+fn sanitize_text(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if (c as u32) < 0x20 || c == '\x7f' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// State representation for the bottom HUD status bar.
 #[derive(Debug, Clone)]
 pub struct HudState {
@@ -48,10 +62,10 @@ impl HudState {
         let max_cols = cols.saturating_sub(1).max(1) as usize;
 
         if let Some(err) = &self.error_message {
-            // Error alert style: bold red background
+            let sanitized_err = sanitize_text(err);
             let error_text = format!(
                 " [ERROR] {} | Preserving last valid frame | 'q' to quit",
-                err
+                sanitized_err
             );
             let truncated = truncate_str(&error_text, max_cols);
             write!(writer, "\x1b[1;37;41m{}\x1b[0m", truncated)?;
@@ -74,10 +88,18 @@ impl HudState {
 }
 
 fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.chars().count() <= max_len {
+    if max_len == 0 {
+        return String::new();
+    }
+
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         format!("{:<width$}", s, width = max_len)
+    } else if max_len < 3 {
+        // Not enough space for "...", take exact characters
+        s.chars().take(max_len).collect()
     } else {
-        let mut truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        let mut truncated: String = s.chars().take(max_len - 3).collect();
         truncated.push_str("...");
         truncated
     }
@@ -115,5 +137,23 @@ mod tests {
         assert!(text.contains("[ERROR]"));
         assert!(text.contains("XML closing tag missing"));
         assert!(text.contains("Preserving last valid frame"));
+    }
+
+    #[test]
+    fn test_sanitize_text_removes_ansi_escapes() {
+        let malicious = "Corrupt\x1b[2J\x1b]50;hack\x07 file\r\n";
+        let clean = sanitize_text(malicious);
+        assert!(!clean.contains('\x1b'));
+        assert_eq!(clean, "Corrupt [2J ]50;hack  file  ");
+    }
+
+    #[test]
+    fn test_truncate_str_small_widths() {
+        assert_eq!(truncate_str("hello", 0), "");
+        assert_eq!(truncate_str("hello", 1), "h");
+        assert_eq!(truncate_str("hello", 2), "he");
+        assert_eq!(truncate_str("hello", 3), "...");
+        assert_eq!(truncate_str("hello", 4), "h...");
+        assert_eq!(truncate_str("hello", 5), "hello");
     }
 }
